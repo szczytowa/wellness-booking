@@ -1,6 +1,73 @@
 import { supabase } from './supabase'
 import { formatDate } from './utils'
 
+// ============ ERROR LOGGING ============
+
+export async function logError(error, userCode = null, extraData = {}) {
+  try {
+    const { error: logErr } = await supabase
+      .from('app_errors')
+      .insert({
+        error_type: error.name || 'Error',
+        error_message: error.message,
+        error_stack: error.stack,
+        user_code: userCode,
+        page_url: typeof window !== 'undefined' ? window.location.href : null,
+        user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : null,
+        extra_data: extraData
+      })
+    
+    if (logErr) console.error('Failed to log error:', logErr)
+  } catch (e) {
+    console.error('Error logging failed:', e)
+  }
+}
+
+// Global error handler setup
+export function setupErrorLogging(userCode = null) {
+  if (typeof window === 'undefined') return
+
+  window.onerror = (message, source, lineno, colno, error) => {
+    logError(error || new Error(message), userCode, {
+      source,
+      lineno,
+      colno
+    })
+  }
+
+  window.onunhandledrejection = (event) => {
+    logError(
+      event.reason instanceof Error ? event.reason : new Error(String(event.reason)),
+      userCode,
+      { type: 'unhandledrejection' }
+    )
+  }
+}
+
+// ============ AUDIT LOG ============
+
+export async function getAuditLog(limit = 100, offset = 0) {
+  const { data, error } = await supabase
+    .from('audit_log')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1)
+  
+  if (error) throw error
+  return data || []
+}
+
+export async function getAppErrors(limit = 50) {
+  const { data, error } = await supabase
+    .from('app_errors')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(limit)
+  
+  if (error) throw error
+  return data || []
+}
+
 // ============ RESERVATIONS ============
 
 export async function getReservations() {

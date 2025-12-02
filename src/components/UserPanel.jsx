@@ -30,7 +30,10 @@ export default function UserPanel({ user, showToast }) {
 
   const today = getStartOfDay(new Date())
   const minDate = today
-  const maxDate = addDays(today, 2)
+  const maxDate = addDays(today, 3) // Changed from 2 to 3 days
+
+  // Get current hour to block past slots
+  const currentHour = new Date().getHours()
 
   const loadData = useCallback(async () => {
     try {
@@ -206,6 +209,8 @@ export default function UserPanel({ user, showToast }) {
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                 {TIME_SLOTS.map(slot => {
                   const occupied = isSlotOccupied(selectedDate, slot.hour)
+                  const isToday = isSameDay(selectedDate, today)
+                  const isPastHour = isToday && slot.hour <= currentHour
                   
                   if (!slot.bookable) {
                     return (
@@ -221,25 +226,27 @@ export default function UserPanel({ user, showToast }) {
                     )
                   }
 
+                  const isUnavailable = occupied || isPastHour
+
                   return (
                     <div
                       key={slot.hour}
                       className={`
                         p-4 rounded-2xl text-center border-2 transition-all
-                        ${occupied 
+                        ${isUnavailable 
                           ? 'bg-red-50 border-red-200 cursor-not-allowed' 
                           : selectedHour === slot.hour
                             ? 'bg-gradient-to-br from-green-400 to-green-700 text-white border-green-700'
                             : 'bg-white border-green-200 cursor-pointer hover:border-green-400 hover:-translate-y-1 hover:shadow-lg'
                         }
                       `}
-                      onClick={() => !occupied && setSelectedHour(slot.hour)}
+                      onClick={() => !isUnavailable && setSelectedHour(slot.hour)}
                     >
                       <div className="text-xl font-bold">{slot.hour}:00</div>
                       <div className={`text-xs uppercase tracking-wide mt-1 ${
-                        occupied ? 'text-red-600' : selectedHour === slot.hour ? 'text-green-100' : 'text-green-600'
+                        isUnavailable ? 'text-red-600' : selectedHour === slot.hour ? 'text-green-100' : 'text-green-600'
                       }`}>
-                        {occupied ? 'ZAJĘTE' : 'Dostępne'}
+                        {isPastHour ? 'MINĘŁO' : occupied ? 'ZAJĘTE' : 'Dostępne'}
                       </div>
                     </div>
                   )

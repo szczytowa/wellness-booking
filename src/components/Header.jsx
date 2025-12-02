@@ -16,7 +16,7 @@ export default function Header({ user, onLogout }) {
       
       <div className="flex items-center gap-4">
         <span className="bg-white px-5 py-2 rounded-full font-semibold text-green-800 border-2 border-green-400">
-          {isAdmin ? '👑 ' : '🏠 '}{user}
+          {isAdmin ? '🔧 ' : '🏠 '}{user}
         </span>
         <button
           className="bg-white text-green-800 border-2 border-green-400 px-6 py-2 rounded-full font-semibold hover:bg-green-400 hover:text-white transition-all"

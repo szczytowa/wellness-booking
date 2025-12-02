@@ -10,14 +10,32 @@ System rezerwacji strefy wellness dla apartamentów z panelem administracyjnym.
 - ✅ Podgląd dostępności w kalendarzu
 - ✅ Odwoływanie rezerwacji (do 60 min przed)
 - ✅ Limit: 1 rezerwacja na 2 dni kalendarzowe
+- ✅ Blokada minionych godzin
+- ✅ Rezerwacja: dziś + 3 dni do przodu
 
 ### Administratorzy (AGNIESZKA-111, ADMIN-111)
-- ✅ Podgląd wszystkich rezerwacji
+- ✅ Podgląd wszystkich rezerwacji (bez limitu dat)
+- ✅ Rezerwacja dla dowolnego użytkownika
 - ✅ Odwoływanie dowolnych rezerwacji
 - ✅ Raport "Zrealizowane" z podsumowaniem
+- ✅ Raport "Analiza" - miesięczne zestawienie
 - ✅ Raport "Full" - wszystkie zdarzenia
+- ✅ Audit Log - historia wszystkich zmian
+- ✅ Monitor błędów aplikacji
 - ✅ Export do Excel/PDF
-- ✅ Filtrowanie po datach
+
+### 🔒 Bezpieczeństwo
+- ✅ Row Level Security (RLS) w Supabase
+- ✅ Walidacja po stronie serwera (triggers)
+- ✅ Content Security Policy (CSP)
+- ✅ HTTPS headers bezpieczeństwa
+- ✅ Audit log wszystkich operacji
+- ✅ Automatyczne czyszczenie starych danych
+
+### 📱 PWA (Progressive Web App)
+- ✅ Instalacja na telefonie/tablecie
+- ✅ Tryb offline z fallback page
+- ✅ Cache dla szybszego ładowania
 
 ## 🚀 Szybki Start
 
@@ -25,7 +43,7 @@ System rezerwacji strefy wellness dla apartamentów z panelem administracyjnym.
 
 1. Utwórz konto na [supabase.com](https://supabase.com)
 2. Stwórz nowy projekt
-3. Przejdź do **SQL Editor** i wykonaj zawartość pliku `supabase/schema.sql`
+3. Przejdź do **SQL Editor** i wykonaj zawartość pliku `supabase/schema-v2.sql`
 4. Przejdź do **Settings → API** i skopiuj:
    - `Project URL` 
    - `anon public` key
@@ -49,7 +67,17 @@ VITE_SUPABASE_URL=https://twoj-projekt.supabase.co
 VITE_SUPABASE_ANON_KEY=twoj-anon-key
 ```
 
-### 3. Uruchom lokalnie
+### 3. Generowanie ikon PWA
+
+```bash
+# Wymaga ImageMagick
+chmod +x scripts/generate-icons.sh
+./scripts/generate-icons.sh
+
+# Lub użyj online: https://realfavicongenerator.net/
+```
+
+### 4. Uruchom lokalnie
 
 ```bash
 npm run dev
@@ -57,29 +85,17 @@ npm run dev
 
 Aplikacja będzie dostępna pod `http://localhost:5173`
 
-### 4. Deploy na Vercel
+### 5. Deploy na Vercel
 
-#### Opcja A: Vercel CLI
 ```bash
 # Zainstaluj Vercel CLI
 npm i -g vercel
-
-# Zaloguj się
-vercel login
 
 # Deploy
 vercel
 ```
 
-#### Opcja B: GitHub + Vercel Dashboard
-
-1. Wrzuć projekt na GitHub
-2. Zaloguj się na [vercel.com](https://vercel.com)
-3. Kliknij "New Project" → Import z GitHub
-4. Dodaj zmienne środowiskowe:
-   - `VITE_SUPABASE_URL`
-   - `VITE_SUPABASE_ANON_KEY`
-5. Deploy!
+Lub przez GitHub → Vercel Dashboard.
 
 ## 🔐 Kody dostępu
 
@@ -104,59 +120,91 @@ wellness-booking/
 │   │   ├── Toast.jsx         # Powiadomienia
 │   │   └── UserPanel.jsx     # Panel użytkownika
 │   ├── lib/
-│   │   ├── api.js            # Funkcje API (Supabase)
+│   │   ├── api.js            # Funkcje API + error logging
 │   │   ├── supabase.js       # Konfiguracja Supabase
 │   │   └── utils.js          # Funkcje pomocnicze
 │   ├── App.jsx               # Główny komponent
 │   ├── index.css             # Style globalne
 │   └── main.jsx              # Entry point
 ├── supabase/
-│   └── schema.sql            # Schema bazy danych
+│   ├── schema.sql            # Schema v1 (stara)
+│   └── schema-v2.sql         # Schema v2 z RLS, triggers, audit
 ├── public/
+│   ├── icons/                # Ikony PWA
+│   ├── manifest.json         # PWA manifest
+│   ├── sw.js                 # Service Worker
+│   ├── offline.html          # Strona offline
 │   └── favicon.svg
-├── .env.example              # Przykład zmiennych środowiskowych
-├── vercel.json               # Konfiguracja Vercel
+├── scripts/
+│   └── generate-icons.sh     # Generator ikon PWA
+├── .env.example
+├── vercel.json               # Konfiguracja + security headers
 ├── package.json
-├── vite.config.js
-├── tailwind.config.js
 └── README.md
 ```
 
-## ⚙️ Konfiguracja Supabase - szczegóły
+## 🔒 Security Headers (vercel.json)
 
-### Włączenie Realtime (opcjonalne)
-Dla automatycznej synchronizacji między użytkownikami:
+| Header | Opis |
+|--------|------|
+| `X-Content-Type-Options` | Zapobiega MIME sniffing |
+| `X-Frame-Options` | Blokuje osadzanie w iframe |
+| `X-XSS-Protection` | Ochrona przed XSS |
+| `Referrer-Policy` | Kontrola referrer |
+| `Content-Security-Policy` | Ogranicza źródła zasobów |
+| `Permissions-Policy` | Blokuje camera/mic/geo |
 
-1. Supabase Dashboard → Database → Replication
-2. Włącz "realtime" dla tabeli `reservations`
+## 🗃️ Supabase Schema v2
 
-### Row Level Security
-Polityki RLS są już skonfigurowane w `schema.sql`. 
-Dla środowiska produkcyjnego rozważ bardziej restrykcyjne polityki.
+### Tabele
+- `reservations` - rezerwacje
+- `events` - zdarzenia (rezerwacja/odwołanie)
+- `audit_log` - szczegółowy log zmian
+- `app_errors` - błędy aplikacji
+- `valid_codes` - lista prawidłowych kodów
 
-## 🛠️ Rozwój
+### Triggery
+- `ensure_slot_available` - sprawdza dostępność przed rezerwacją
+- `update_reservations_updated_at` - aktualizuje timestamp
+- `audit_reservations` - loguje wszystkie zmiany
 
-```bash
-# Development
-npm run dev
-
-# Build
-npm run build
-
-# Preview build
-npm run preview
+### Automatyczne czyszczenie
+```sql
+-- Uruchom ręcznie lub przez pg_cron
+SELECT cleanup_old_data();
 ```
+
+Usuwa:
+- Rezerwacje starsze niż 2 lata
+- Events starsze niż 2 lata
+- Audit log starszy niż 1 rok
+- Błędy starsze niż 3 miesiące
+
+## 📱 PWA - Instalacja
+
+### Android
+1. Otwórz stronę w Chrome
+2. Menu (⋮) → "Dodaj do ekranu głównego"
+
+### iOS
+1. Otwórz stronę w Safari
+2. Przycisk udostępniania → "Dodaj do ekranu początkowego"
+
+### Desktop
+1. Otwórz stronę w Chrome/Edge
+2. Ikona instalacji w pasku adresu lub Menu → "Zainstaluj"
 
 ## 📝 Zasady rezerwacji
 
 | Reguła | Opis |
 |--------|------|
-| Dostępne dni | Dzisiaj + 2 dni do przodu |
+| Dostępne dni | Dzisiaj + 3 dni do przodu |
 | Godziny | 14:00 - 19:00 (sloty co godzinę) |
 | Czas trwania | 50 minut |
 | Limit | 1 rezerwacja na 2 dni kalendarzowe |
 | Odwołanie | Min. 60 minut przed terminem |
 | 20:00-21:00 | Otwarte dla pozostałych (bez rezerwacji) |
+| Minione godziny | Automatycznie blokowane |
 
 ## 🐛 Rozwiązywanie problemów
 
@@ -164,12 +212,18 @@ npm run preview
 - Sprawdź czy plik `.env` istnieje
 - Sprawdź poprawność kluczy Supabase
 
-### Błąd połączenia z bazą
-- Sprawdź czy projekt Supabase jest aktywny
-- Sprawdź czy schema została poprawnie utworzona
+### Błąd RLS "new row violates row-level security policy"
+- Sprawdź czy tabela `valid_codes` zawiera wszystkie kody
+- Uruchom ponownie `schema-v2.sql`
 
-### Rezerwacje się nie aktualizują
-- Włącz Realtime w Supabase dla tabeli `reservations`
+### PWA nie instaluje się
+- Sprawdź czy strona działa na HTTPS
+- Sprawdź czy manifest.json jest dostępny
+- Sprawdź konsolę przeglądarki (F12)
+
+### Ikony PWA nie wyświetlają się
+- Wygeneruj ikony PNG używając `scripts/generate-icons.sh`
+- Lub użyj generatora online
 
 ## 📄 Licencja
 
