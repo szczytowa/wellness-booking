@@ -1,19 +1,26 @@
 import { useState } from 'react'
-import { VALID_CODES } from '../lib/supabase'
+import { validatePin } from '../lib/supabase'
 
 export default function LoginPage({ onLogin }) {
-  const [code, setCode] = useState('')
+  const [pin, setPin] = useState('')
   const [error, setError] = useState('')
 
   const handleSubmit = (e) => {
     e.preventDefault()
-    const normalizedCode = code.trim().toUpperCase()
+    const result = validatePin(pin)
     
-    if (VALID_CODES.includes(normalizedCode)) {
-      onLogin(normalizedCode)
+    if (result.valid) {
+      onLogin(result.user)
     } else {
       setError('Nieprawidłowy kod. Spróbuj ponownie.')
     }
+  }
+
+  // Tylko cyfry, max 6 znaków
+  const handlePinChange = (e) => {
+    const value = e.target.value.replace(/\D/g, '').slice(0, 6)
+    setPin(value)
+    setError('')
   }
 
   return (
@@ -36,26 +43,28 @@ export default function LoginPage({ onLogin }) {
         <form onSubmit={handleSubmit}>
           <div className="mb-6">
             <label className="block text-center font-semibold text-green-800 mb-3 text-sm uppercase tracking-wider">
-              Podaj kod
+              Podaj kod PIN
             </label>
             <input
               type="text"
-              className="w-full px-6 py-5 text-xl border-4 border-green-200 rounded-2xl text-center font-semibold text-green-800 bg-green-50 focus:outline-none focus:border-green-400 focus:shadow-lg transition-all placeholder:text-green-400 placeholder:font-normal"
-              value={code}
-              onChange={(e) => {
-                setCode(e.target.value.toUpperCase())
-                setError('')
-              }}
+              inputMode="numeric"
+              pattern="[0-9]*"
+              className="w-full px-6 py-5 text-3xl border-4 border-green-200 rounded-2xl text-center font-bold text-green-800 bg-green-50 focus:outline-none focus:border-green-400 focus:shadow-lg transition-all placeholder:text-green-400 placeholder:font-normal placeholder:text-sm tracking-[0.3em]"
+              value={pin}
+              onChange={handlePinChange}
               placeholder="KOD APARTAMENTU"
+              maxLength={6}
               autoFocus
+              autoComplete="off"
             />
           </div>
           
           <button
             type="submit"
-            className="w-full py-5 bg-gradient-to-r from-green-500 to-green-700 text-white rounded-2xl text-xl font-bold uppercase tracking-widest hover:-translate-y-1 hover:shadow-xl transition-all active:translate-y-0"
+            disabled={pin.length < 4}
+            className="w-full py-5 bg-gradient-to-r from-green-500 to-green-700 text-white rounded-2xl text-xl font-bold uppercase tracking-widest hover:-translate-y-1 hover:shadow-xl transition-all active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0"
           >
-            REZERWUJ
+            WEJDŹ
           </button>
         </form>
         
