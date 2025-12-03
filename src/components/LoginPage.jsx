@@ -35,7 +35,7 @@ export default function LoginPage({ onLogin }) {
         {/* Form */}
         <form onSubmit={handleSubmit}>
           <div className="mb-6">
-            <label className="block text-left font-semibold text-green-800 mb-3 text-sm uppercase tracking-wider">
+            <label className="block text-center font-semibold text-green-800 mb-3 text-sm uppercase tracking-wider">
               Podaj kod
             </label>
             <input
@@ -46,7 +46,7 @@ export default function LoginPage({ onLogin }) {
                 setCode(e.target.value.toUpperCase())
                 setError('')
               }}
-              placeholder="np. APARTAMENT 1"
+              placeholder="KOD APARTAMENTU"
               autoFocus
             />
           </div>

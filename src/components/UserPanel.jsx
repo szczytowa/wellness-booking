@@ -118,7 +118,7 @@ export default function UserPanel({ user, showToast }) {
 
     setModal({
       title: 'Potwierdzenie rezerwacji',
-      message: `Czy na pewno chcesz zarezerwować termin ${formatDateTime(selectedDate, selectedHour)}? Slot trwa 50 minut.`,
+      message: `Czy na pewno chcesz zarezerwować termin ${formatDateTime(selectedDate, selectedHour)}? Wejście trwa 50 minut.`,
       onConfirm: async () => {
         try {
           setActionLoading(true)
@@ -182,8 +182,8 @@ export default function UserPanel({ user, showToast }) {
         {/* Info Box */}
         <div className="bg-green-100 border-2 border-green-400 rounded-2xl p-5 mb-6">
           <p className="text-green-800 leading-relaxed">
-            <strong>Zasady rezerwacji:</strong> Możesz zarezerwować 1 slot na 2 dni kalendarzowe. 
-            Slot trwa 50 minut. Odwołanie możliwe do 60 minut przed terminem.
+            <strong>Zasady rezerwacji:</strong> Możesz zarezerwować 1 wejście na 2 dni. 
+            Wejście trwa 50 minut. Odwołanie możliwe 60 minut przed rezerwacją.
           </p>
           {myReservations.length > 0 && (
             <p className="mt-3 text-green-700">
@@ -285,7 +285,7 @@ export default function UserPanel({ user, showToast }) {
                 <h4 className="font-display text-lg text-green-800">
                   {formatDateTime(reservation.date, reservation.hour)}
                 </h4>
-                <p className="text-green-600 text-sm">Slot trwa 50 minut</p>
+                <p className="text-green-600 text-sm">Rezerwacja trwa 50 minut</p>
               </div>
               <button
                 className={`px-5 py-2 rounded-xl font-semibold transition-all ${

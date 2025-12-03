@@ -358,7 +358,7 @@ $$ LANGUAGE plpgsql;
 -- 9. ENABLE REALTIME
 -- =============================================
 
--- ALTER PUBLICATION supabase_realtime ADD TABLE reservations;
+ALTER PUBLICATION supabase_realtime ADD TABLE reservations;
 
 -- =============================================
 -- 10. HELPER FUNCTIONS
