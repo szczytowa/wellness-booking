@@ -111,22 +111,29 @@ export async function getReservationsByDateRange(dateFrom, dateTo) {
   return data || []
 }
 
-export async function createReservation(user, date, hour) {
+export async function createReservation(user, date, hour, isAdmin = false, adminUser = null) {
   const { data, error } = await supabase
     .from('reservations')
     .insert({
       user_code: user,
       date: formatDate(date),
       hour: hour,
-      status: 'active'
+      status: 'active',
+      created_by: isAdmin ? adminUser : null
     })
     .select()
     .single()
   
   if (error) throw error
   
-  // Log event
-  await logEvent('reservation', user, formatDate(date), hour)
+  // Log event - different type for admin booking
+  await logEvent(
+    isAdmin ? 'admin-booking' : 'reservation', 
+    user, 
+    formatDate(date), 
+    hour,
+    isAdmin ? adminUser : null
+  )
   
   return data
 }

@@ -129,7 +129,7 @@ export default function AdminPanel({ user, showToast }) {
 
     try {
       setActionLoading(true)
-      await createReservation(selectedUserForBooking, bookingModal.date, bookingModal.hour)
+      await createReservation(selectedUserForBooking, bookingModal.date, bookingModal.hour, true, user)
       setBookingModal(null)
       setSelectedUserForBooking('')
       showToast(`Rezerwacja dla ${selectedUserForBooking} została dodana!`, 'success')
@@ -386,7 +386,9 @@ export default function AdminPanel({ user, showToast }) {
         exportData = evt.map(e => ({
           'Data zdarzenia': new Date(e.created_at).toLocaleString('pl-PL'),
           'Typ': e.type === 'reservation' ? 'Rezerwacja' : 
-                 e.type === 'cancellation' ? 'Odwołanie' : 'Odwołanie (Admin)',
+                 e.type === 'cancellation' ? 'Odwołanie' : 
+                 e.type === 'admin-cancel' ? 'Odwołanie (Admin)' :
+                 e.type === 'admin-booking' ? 'Rezerwacja (Admin)' : e.type,
           'Użytkownik': e.user_code,
           'Data rezerwacji': formatDatePL(e.date),
           'Godzina': `${e.hour}:00`,
@@ -453,7 +455,9 @@ export default function AdminPanel({ user, showToast }) {
         const evt = await getEvents(dateFrom || null, dateTo || null)
         evt.forEach(e => {
           const typeText = e.type === 'reservation' ? 'Rezerwacja' : 
-                          e.type === 'cancellation' ? 'Odwolanie' : 'Odwolanie (Admin)'
+                          e.type === 'cancellation' ? 'Odwolanie' : 
+                          e.type === 'admin-cancel' ? 'Odwolanie (Admin)' :
+                          e.type === 'admin-booking' ? 'Rezerwacja (Admin)' : e.type
           const text = `${new Date(e.created_at).toLocaleString('pl-PL')} - ${typeText} - ${e.user_code} - ${e.hour}:00`
           doc.text(text, 20, yPos)
           yPos += 8
@@ -909,10 +913,12 @@ export default function AdminPanel({ user, showToast }) {
                     <td className="p-4">
                       <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold uppercase ${
                         e.type === 'reservation' ? 'bg-green-100 text-green-800' :
+                        e.type === 'admin-booking' ? 'bg-blue-100 text-blue-800' :
                         e.type === 'cancellation' ? 'bg-red-100 text-red-800' :
                         'bg-orange-100 text-orange-800'
                       }`}>
                         {e.type === 'reservation' ? 'Rezerwacja' : 
+                         e.type === 'admin-booking' ? 'Rezerwacja (Admin)' :
                          e.type === 'cancellation' ? 'Odwołanie' : 'Odwołanie (Admin)'}
                       </span>
                     </td>
