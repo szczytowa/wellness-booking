@@ -7,7 +7,9 @@ import {
   getReservationsByUser, 
   createReservation, 
   cancelReservation,
-  subscribeToReservations 
+  getBlockedSlots,
+  subscribeToReservations,
+  subscribeToBlockedSlots
 } from '../lib/api'
 import { 
   formatDate, 
@@ -27,6 +29,7 @@ export default function UserPanel({ user, showToast }) {
   const [actionLoading, setActionLoading] = useState(false)
   const [reservations, setReservations] = useState([])
   const [myReservations, setMyReservations] = useState([])
+  const [blockedSlots, setBlockedSlots] = useState([])
 
   const today = getStartOfDay(new Date())
   const minDate = today
@@ -38,11 +41,13 @@ export default function UserPanel({ user, showToast }) {
   const loadData = useCallback(async () => {
     try {
       setLoading(true)
-      const [all, mine] = await Promise.all([
+      const [all, mine, blocked] = await Promise.all([
         getReservations(),
-        getReservationsByUser(user)
+        getReservationsByUser(user),
+        getBlockedSlots()
       ])
       setReservations(all)
+      setBlockedSlots(blocked)
       
       // Filtruj przeszłe rezerwacje - pokazuj tylko aktualne i przyszłe
       const now = new Date()
@@ -69,11 +74,17 @@ export default function UserPanel({ user, showToast }) {
     loadData()
     
     // Subscribe to real-time updates
-    const unsubscribe = subscribeToReservations(() => {
+    const unsubReservations = subscribeToReservations(() => {
+      loadData()
+    })
+    const unsubBlocked = subscribeToBlockedSlots(() => {
       loadData()
     })
     
-    return () => unsubscribe()
+    return () => {
+      unsubReservations()
+      unsubBlocked()
+    }
   }, [loadData])
 
   // Check if user can make a reservation (1 per 2 calendar days)
@@ -97,12 +108,27 @@ export default function UserPanel({ user, showToast }) {
     return addDays(lastDate, 2)
   }, [myReservations, today])
 
-  // Check if a slot is occupied
+  // Check if a slot is occupied or blocked
   const isSlotOccupied = useCallback((date, hour) => {
-    return reservations.some(r => 
+    // Check reservations
+    const hasReservation = reservations.some(r => 
       isSameDay(parseDate(r.date), date) && r.hour === hour
     )
-  }, [reservations])
+    if (hasReservation) return true
+    
+    // Check blocked slots
+    const isBlocked = blockedSlots.some(b => 
+      isSameDay(parseDate(b.date), date) && b.hour === hour
+    )
+    return isBlocked
+  }, [reservations, blockedSlots])
+
+  // Check if slot is blocked (for display purposes)
+  const isSlotBlocked = useCallback((date, hour) => {
+    return blockedSlots.some(b => 
+      isSameDay(parseDate(b.date), date) && b.hour === hour
+    )
+  }, [blockedSlots])
 
   // Can cancel reservation (60 min before)
   const canCancelReservation = (reservation) => {
@@ -223,6 +249,7 @@ export default function UserPanel({ user, showToast }) {
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                 {TIME_SLOTS.map(slot => {
                   const occupied = isSlotOccupied(selectedDate, slot.hour)
+                  const blocked = isSlotBlocked(selectedDate, slot.hour)
                   const isToday = isSameDay(selectedDate, today)
                   const isPastHour = isToday && slot.hour <= currentHour
                   
@@ -240,7 +267,7 @@ export default function UserPanel({ user, showToast }) {
                     )
                   }
 
-                  const isUnavailable = occupied || isPastHour
+                  const isUnavailable = occupied || isPastHour || blocked
 
                   return (
                     <div
@@ -248,7 +275,7 @@ export default function UserPanel({ user, showToast }) {
                       className={`
                         p-4 rounded-2xl text-center border-2 transition-all
                         ${isUnavailable 
-                          ? 'bg-red-50 border-red-200 cursor-not-allowed' 
+                          ? blocked ? 'bg-orange-50 border-orange-200 cursor-not-allowed' : 'bg-red-50 border-red-200 cursor-not-allowed' 
                           : selectedHour === slot.hour
                             ? 'bg-gradient-to-br from-green-400 to-green-700 text-white border-green-700'
                             : 'bg-white border-green-200 cursor-pointer hover:border-green-400 hover:-translate-y-1 hover:shadow-lg'
@@ -258,9 +285,9 @@ export default function UserPanel({ user, showToast }) {
                     >
                       <div className="text-xl font-bold">{slot.hour}:00</div>
                       <div className={`text-xs uppercase tracking-wide mt-1 ${
-                        isUnavailable ? 'text-red-600' : selectedHour === slot.hour ? 'text-green-100' : 'text-green-600'
+                        blocked ? 'text-orange-600' : isUnavailable ? 'text-red-600' : selectedHour === slot.hour ? 'text-green-100' : 'text-green-600'
                       }`}>
-                        {isPastHour ? 'MINĘŁO' : occupied ? 'ZAJĘTE' : 'Dostępne'}
+                        {isPastHour ? 'MINĘŁO' : blocked ? 'NIEDOSTĘPNE' : occupied ? 'ZAJĘTE' : 'Dostępne'}
                       </div>
                     </div>
                   )
