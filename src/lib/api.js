@@ -304,29 +304,18 @@ export async function getEvents(dateFrom, dateTo) {
     .select('*')
     .order('created_at', { ascending: false })
   
-  // Filtruj po dacie rezerwacji (kolumna date), nie po created_at
+  // Filtruj po dacie utworzenia zdarzenia (created_at)
   if (dateFrom) {
-    query = query.gte('date', dateFrom)
+    query = query.gte('created_at', `${dateFrom}T00:00:00`)
   }
   if (dateTo) {
-    query = query.lte('date', dateTo)
+    query = query.lte('created_at', `${dateTo}T23:59:59`)
   }
   
   const { data, error } = await query
   if (error) throw error
   
-  // Dodatkowe filtrowanie po stronie klienta dla pewności
-  let filtered = data || []
-  if (dateFrom || dateTo) {
-    filtered = filtered.filter(e => {
-      const eventDate = e.date // format YYYY-MM-DD
-      if (dateFrom && eventDate < dateFrom) return false
-      if (dateTo && eventDate > dateTo) return false
-      return true
-    })
-  }
-  
-  return filtered
+  return data || []
 }
 
 // ============ STATISTICS ============
