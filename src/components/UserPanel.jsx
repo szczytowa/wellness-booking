@@ -43,7 +43,11 @@ export default function UserPanel({ user, showToast }) {
         getReservationsByUser(user)
       ])
       setReservations(all)
-      setMyReservations(mine)
+      
+      // Filtruj przeszłe rezerwacje - pokazuj tylko dzisiejsze i przyszłe
+      const todayStr = formatDate(new Date())
+      const futureReservations = mine.filter(r => r.date >= todayStr)
+      setMyReservations(futureReservations)
     } catch (err) {
       showToast('Błąd ładowania danych: ' + err.message, 'error')
     } finally {
@@ -192,7 +196,7 @@ export default function UserPanel({ user, showToast }) {
           )}
         </div>
 
-        <div className="flex flex-col lg:flex-row gap-8">
+        <div className="flex flex-col lg:flex-row gap-8 items-start justify-center">
           <Calendar
             selectedDate={selectedDate}
             onSelectDate={setSelectedDate}
