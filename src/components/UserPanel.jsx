@@ -44,9 +44,19 @@ export default function UserPanel({ user, showToast }) {
       ])
       setReservations(all)
       
-      // Filtruj przeszłe rezerwacje - pokazuj tylko dzisiejsze i przyszłe
-      const todayStr = formatDate(new Date())
-      const futureReservations = mine.filter(r => r.date >= todayStr)
+      // Filtruj przeszłe rezerwacje - pokazuj tylko aktualne i przyszłe
+      const now = new Date()
+      const todayStr = formatDate(now)
+      const currentHourNow = now.getHours()
+      
+      const futureReservations = mine.filter(r => {
+        // Przyszłe dni - zawsze pokazuj
+        if (r.date > todayStr) return true
+        // Dzisiejsze - pokazuj tylko jeśli godzina jeszcze nie minęła
+        if (r.date === todayStr && r.hour > currentHourNow) return true
+        // Przeszłe - ukryj
+        return false
+      })
       setMyReservations(futureReservations)
     } catch (err) {
       showToast('Błąd ładowania danych: ' + err.message, 'error')
@@ -196,7 +206,7 @@ export default function UserPanel({ user, showToast }) {
           )}
         </div>
 
-        <div className="flex flex-col lg:flex-row gap-8 items-start justify-center">
+        <div className="flex flex-col items-center gap-8">
           <Calendar
             selectedDate={selectedDate}
             onSelectDate={setSelectedDate}
@@ -205,8 +215,8 @@ export default function UserPanel({ user, showToast }) {
           />
 
           {selectedDate && (
-            <div className="flex-1 min-w-[300px]">
-              <h3 className="font-display text-xl text-green-800 mb-4">
+            <div className="w-full max-w-md">
+              <h3 className="font-display text-xl text-green-800 mb-4 text-center">
                 🕐 Godziny - {formatDatePL(selectedDate)}
               </h3>
               

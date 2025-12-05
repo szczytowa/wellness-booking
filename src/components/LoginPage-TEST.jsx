@@ -55,13 +55,6 @@ export default function LoginPage({ onLogin }) {
             />
           </div>
           
-          {/* Test mode hint */}
-          <div className="mb-6 text-xs text-gray-500 bg-gray-50 p-3 rounded-xl">
-            <strong>TRYB TESTOWY:</strong><br/>
-            Użytkownik: APARTAMENT 1 - APARTAMENT 18<br/>
-            Admin: AGNIESZKA-111 lub ADMIN-111
-          </div>
-          
           <button
             type="submit"
             disabled={code.length < 1}
