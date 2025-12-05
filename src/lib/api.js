@@ -245,8 +245,12 @@ export async function createBlockedSlot(date, hour, reason, adminUser) {
   
   if (error) throw error
   
-  // Log event
-  await logEvent('block', null, formatDate(date), hour, adminUser, reason)
+  // Log event - wrapped in try/catch to not break main action
+  try {
+    await logEvent('block', null, formatDate(date), hour, adminUser, reason)
+  } catch (e) {
+    console.warn('Failed to log block event:', e)
+  }
   
   return data
 }
@@ -267,8 +271,12 @@ export async function deleteBlockedSlot(id, adminUser) {
   
   if (error) throw error
   
-  // Log event
-  await logEvent('unblock', null, slot.date, slot.hour, adminUser)
+  // Log event - wrapped in try/catch to not break main action
+  try {
+    await logEvent('unblock', null, slot.date, slot.hour, adminUser)
+  } catch (e) {
+    console.warn('Failed to log unblock event:', e)
+  }
   
   return true
 }
