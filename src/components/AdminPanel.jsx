@@ -6,10 +6,16 @@ import {
   getReservationsByDateRange,
   cancelReservation,
   createReservation,
+  updateReservationNote,
   getEvents,
   getAuditLog,
   getAppErrors,
-  subscribeToReservations 
+  getBlockedSlots,
+  createBlockedSlot,
+  deleteBlockedSlot,
+  getStatistics,
+  subscribeToReservations,
+  subscribeToBlockedSlots
 } from '../lib/api'
 import { 
   formatDate, 
@@ -23,6 +29,8 @@ import {
 import * as XLSX from 'xlsx'
 import { jsPDF } from 'jspdf'
 
+const DAYS_PL_FULL = ['Niedziela', 'Poniedzialek', 'Wtorek', 'Sroda', 'Czwartek', 'Piatek', 'Sobota']
+
 export default function AdminPanel({ user, showToast }) {
   const [activeTab, setActiveTab] = useState('calendar')
   const [dateFrom, setDateFrom] = useState('')
@@ -32,45 +40,46 @@ export default function AdminPanel({ user, showToast }) {
   const [actionLoading, setActionLoading] = useState(false)
   const [reservations, setReservations] = useState([])
   const [events, setEvents] = useState([])
+  const [blockedSlots, setBlockedSlots] = useState([])
   
-  // Analysis report state
   const [analysisMonthFrom, setAnalysisMonthFrom] = useState('')
   const [analysisMonthTo, setAnalysisMonthTo] = useState('')
   const [analysisData, setAnalysisData] = useState(null)
-
-  // Admin calendar - unlimited range
+  const [statsDateFrom, setStatsDateFrom] = useState('')
+  const [statsDateTo, setStatsDateTo] = useState('')
+  const [statistics, setStatistics] = useState(null)
   const [adminCalendarDate, setAdminCalendarDate] = useState(new Date())
-  
-  // Admin booking for users
   const [bookingModal, setBookingModal] = useState(null)
   const [selectedUserForBooking, setSelectedUserForBooking] = useState('')
-  
-  // Audit log state
+  const [bookingNote, setBookingNote] = useState('')
+  const [blockModal, setBlockModal] = useState(null)
+  const [blockReason, setBlockReason] = useState('')
+  const [noteModal, setNoteModal] = useState(null)
+  const [editingNote, setEditingNote] = useState('')
   const [auditLog, setAuditLog] = useState([])
   const [appErrors, setAppErrors] = useState([])
 
   const today = getStartOfDay(new Date())
 
-  // Generate dates for admin calendar view (7 days from selected date)
   const getAdminDisplayDates = () => {
     const dates = []
-    for (let i = 0; i < 7; i++) {
-      dates.push(addDays(adminCalendarDate, i))
-    }
+    for (let i = 0; i < 7; i++) dates.push(addDays(adminCalendarDate, i))
     return dates
   }
 
   const loadData = useCallback(async () => {
     try {
       setLoading(true)
-      const [res, evt] = await Promise.all([
+      const [res, evt, blocked] = await Promise.all([
         getReservations(),
-        getEvents(dateFrom || null, dateTo || null)
+        getEvents(dateFrom || null, dateTo || null),
+        getBlockedSlots()
       ])
       setReservations(res)
       setEvents(evt)
+      setBlockedSlots(blocked)
     } catch (err) {
-      showToast('Błąd ładowania danych: ' + err.message, 'error')
+      showToast('Blad ladowania danych: ' + err.message, 'error')
     } finally {
       setLoading(false)
     }
@@ -78,1031 +87,496 @@ export default function AdminPanel({ user, showToast }) {
 
   useEffect(() => {
     loadData()
-    
-    const unsubscribe = subscribeToReservations(() => {
-      loadData()
-    })
-    
-    return () => unsubscribe()
+    const unsub1 = subscribeToReservations(() => loadData())
+    const unsub2 = subscribeToBlockedSlots(() => loadData())
+    return () => { unsub1(); unsub2() }
   }, [loadData])
 
-  // Get reservations for a specific date
-  const getReservationsForDate = (date) => {
-    return reservations.filter(r => 
-      isSameDay(parseDate(r.date), date)
-    ).sort((a, b) => a.hour - b.hour)
-  }
+  const getReservationsForDate = (date) => reservations.filter(r => isSameDay(parseDate(r.date), date)).sort((a, b) => a.hour - b.hour)
+  const getBlockedSlotInfo = (date, hour) => blockedSlots.find(b => isSameDay(parseDate(b.date), date) && b.hour === hour)
 
-  // Handle admin cancel
   const handleAdminCancel = (reservation) => {
     setModal({
-      title: 'Odwołanie rezerwacji (Admin)',
-      message: `Czy na pewno chcesz odwołać rezerwację użytkownika ${reservation.user_code} na ${formatDateTime(reservation.date, reservation.hour)}?`,
+      title: 'Odwolanie rezerwacji (Admin)',
+      message: `Czy na pewno chcesz odwolac rezerwacje ${reservation.user_code} na ${formatDateTime(reservation.date, reservation.hour)}?`,
       onConfirm: async () => {
         try {
           setActionLoading(true)
           await cancelReservation(reservation.id, reservation.user_code, true, user)
           setModal(null)
-          showToast('Rezerwacja została odwołana', 'success')
+          showToast('Rezerwacja odwolana', 'success')
           await loadData()
-        } catch (err) {
-          showToast('Błąd: ' + err.message, 'error')
-        } finally {
-          setActionLoading(false)
-        }
+        } catch (err) { showToast('Blad: ' + err.message, 'error') }
+        finally { setActionLoading(false) }
       },
       onCancel: () => setModal(null)
     })
   }
 
-  // Handle admin booking for user
-  const handleAdminBooking = (date, hour) => {
-    setBookingModal({ date, hour })
-    setSelectedUserForBooking('')
-  }
+  const handleAdminBooking = (date, hour) => { setBookingModal({ date, hour }); setSelectedUserForBooking(''); setBookingNote('') }
 
   const confirmAdminBooking = async () => {
-    if (!selectedUserForBooking) {
-      showToast('Wybierz apartament', 'error')
-      return
-    }
-
+    if (!selectedUserForBooking) { showToast('Wybierz apartament', 'error'); return }
     try {
       setActionLoading(true)
-      await createReservation(selectedUserForBooking, bookingModal.date, bookingModal.hour, true, user)
-      setBookingModal(null)
-      setSelectedUserForBooking('')
-      showToast(`Rezerwacja dla ${selectedUserForBooking} została dodana!`, 'success')
+      await createReservation(selectedUserForBooking, bookingModal.date, bookingModal.hour, true, user, bookingNote || null)
+      setBookingModal(null); setSelectedUserForBooking(''); setBookingNote('')
+      showToast(`Rezerwacja dla ${selectedUserForBooking} dodana!`, 'success')
       await loadData()
-    } catch (err) {
-      showToast('Błąd: ' + err.message, 'error')
-    } finally {
-      setActionLoading(false)
-    }
+    } catch (err) { showToast('Blad: ' + err.message, 'error') }
+    finally { setActionLoading(false) }
   }
 
-  // Filter completed reservations
-  const getCompletedReservations = async () => {
+  const handleBlockSlot = (date, hour) => { setBlockModal({ date, hour }); setBlockReason('') }
+
+  const confirmBlockSlot = async () => {
     try {
-      return await getReservationsByDateRange(dateFrom || null, dateTo || null)
-    } catch (err) {
-      showToast('Błąd: ' + err.message, 'error')
-      return []
-    }
+      setActionLoading(true)
+      await createBlockedSlot(blockModal.date, blockModal.hour, blockReason || 'Zablokowane', user)
+      setBlockModal(null); setBlockReason('')
+      showToast('Termin zablokowany', 'success')
+      await loadData()
+    } catch (err) { showToast('Blad: ' + err.message, 'error') }
+    finally { setActionLoading(false) }
   }
 
-  // Get summary by apartment
-  const getSummaryByApartment = (reservations) => {
-    const summary = {}
-    USERS.forEach(u => {
-      summary[u] = reservations.filter(r => r.user_code === u && r.status === 'active').length
+  const handleUnblockSlot = (blockedSlot) => {
+    setModal({
+      title: 'Odblokowanie terminu',
+      message: `Odblokowac ${formatDateTime(blockedSlot.date, blockedSlot.hour)}?`,
+      onConfirm: async () => {
+        try {
+          setActionLoading(true)
+          await deleteBlockedSlot(blockedSlot.id, user)
+          setModal(null)
+          showToast('Termin odblokowany', 'success')
+          await loadData()
+        } catch (err) { showToast('Blad: ' + err.message, 'error') }
+        finally { setActionLoading(false) }
+      },
+      onCancel: () => setModal(null)
     })
-    return summary
   }
 
-  // ============ ANALYSIS REPORT FUNCTIONS ============
-  
-  // Generate month options for select
+  const handleEditNote = (reservation) => { setNoteModal(reservation); setEditingNote(reservation.note || '') }
+
+  const confirmEditNote = async () => {
+    try {
+      setActionLoading(true)
+      await updateReservationNote(noteModal.id, editingNote, user)
+      setNoteModal(null); setEditingNote('')
+      showToast('Notatka zapisana', 'success')
+      await loadData()
+    } catch (err) { showToast('Blad: ' + err.message, 'error') }
+    finally { setActionLoading(false) }
+  }
+
+  const loadStatistics = async () => {
+    try {
+      setLoading(true)
+      const stats = await getStatistics(statsDateFrom || null, statsDateTo || null)
+      setStatistics(stats)
+    } catch (err) { showToast('Blad statystyk: ' + err.message, 'error') }
+    finally { setLoading(false) }
+  }
+
   const generateMonthOptions = () => {
     const options = []
     const currentDate = new Date()
-    // Go back 24 months and forward 12 months
     for (let i = -24; i <= 12; i++) {
       const date = new Date(currentDate.getFullYear(), currentDate.getMonth() + i, 1)
-      const value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
-      const label = `${MONTHS_PL[date.getMonth()]} ${date.getFullYear()}`
-      options.push({ value, label })
+      options.push({ value: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`, label: `${MONTHS_PL[date.getMonth()]} ${date.getFullYear()}` })
     }
     return options
   }
 
-  // Get first and last day of month
   const getMonthRange = (monthStr) => {
     const [year, month] = monthStr.split('-').map(Number)
-    const firstDay = new Date(year, month - 1, 1)
-    const lastDay = new Date(year, month, 0)
-    return { firstDay, lastDay }
+    return { firstDay: new Date(year, month - 1, 1), lastDay: new Date(year, month, 0) }
   }
 
-  // Generate months between two dates
   const getMonthsBetween = (fromMonth, toMonth) => {
     const months = []
     const [fromYear, fromM] = fromMonth.split('-').map(Number)
     const [toYear, toM] = toMonth.split('-').map(Number)
-    
     let current = new Date(fromYear, fromM - 1, 1)
     const end = new Date(toYear, toM - 1, 1)
-    
     while (current <= end) {
-      months.push({
-        value: `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`,
-        label: `${MONTHS_PL[current.getMonth()]} ${current.getFullYear()}`,
-        shortLabel: `${MONTHS_PL[current.getMonth()].substring(0, 3)} ${current.getFullYear()}`
-      })
+      months.push({ value: `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`, label: `${MONTHS_PL[current.getMonth()]} ${current.getFullYear()}`, shortLabel: `${MONTHS_PL[current.getMonth()].substring(0, 3)} ${current.getFullYear()}` })
       current = new Date(current.getFullYear(), current.getMonth() + 1, 1)
     }
     return months
   }
 
-  // Load analysis data
   const loadAnalysisData = async () => {
-    if (!analysisMonthFrom || !analysisMonthTo) {
-      showToast('Wybierz zakres miesięcy', 'error')
-      return
-    }
-
-    // Validate range
-    if (analysisMonthFrom > analysisMonthTo) {
-      showToast('Data początkowa musi być przed datą końcową', 'error')
-      return
-    }
-
+    if (!analysisMonthFrom || !analysisMonthTo) { showToast('Wybierz zakres', 'error'); return }
+    if (analysisMonthFrom > analysisMonthTo) { showToast('Zla kolejnosc dat', 'error'); return }
     try {
       setLoading(true)
       const { firstDay } = getMonthRange(analysisMonthFrom)
       const { lastDay } = getMonthRange(analysisMonthTo)
-      
-      const res = await getReservationsByDateRange(
-        formatDate(firstDay),
-        formatDate(lastDay)
-      )
-      
-      const activeRes = res.filter(r => r.status === 'active')
+      const [reservationsData] = await Promise.all([getReservationsByDateRange(formatDate(firstDay), formatDate(lastDay))])
       const months = getMonthsBetween(analysisMonthFrom, analysisMonthTo)
-      
-      // Build data structure
-      const data = {
-        months,
-        apartments: USERS.map(apt => {
-          const row = { name: apt, months: {}, total: 0 }
-          months.forEach(m => {
-            const { firstDay, lastDay } = getMonthRange(m.value)
-            const count = activeRes.filter(r => {
-              const rDate = parseDate(r.date)
-              return r.user_code === apt && rDate >= firstDay && rDate <= lastDay
-            }).length
-            row.months[m.value] = count
-            row.total += count
-          })
-          return row
-        }),
-        monthTotals: {},
-        grandTotal: 0
-      }
-      
-      // Calculate month totals
-      months.forEach(m => {
-        data.monthTotals[m.value] = data.apartments.reduce((sum, apt) => sum + apt.months[m.value], 0)
-        data.grandTotal += data.monthTotals[m.value]
+      const apartmentData = USERS.map(apartment => {
+        const monthlyData = months.map(month => {
+          const { firstDay: mFirst, lastDay: mLast } = getMonthRange(month.value)
+          const count = reservationsData.filter(r => r.user_code === apartment && r.status === 'active' && r.date >= formatDate(mFirst) && r.date <= formatDate(mLast)).length
+          return { month: month.value, count }
+        })
+        return { apartment, monthlyData, total: monthlyData.reduce((sum, m) => sum + m.count, 0) }
       })
-      
-      setAnalysisData(data)
-    } catch (err) {
-      showToast('Błąd ładowania danych: ' + err.message, 'error')
-    } finally {
-      setLoading(false)
-    }
+      const monthlyTotals = months.map(month => ({ month: month.value, label: month.shortLabel, total: apartmentData.reduce((sum, apt) => sum + (apt.monthlyData.find(m => m.month === month.value)?.count || 0), 0) }))
+      setAnalysisData({ months, apartmentData, monthlyTotals, grandTotal: apartmentData.reduce((sum, apt) => sum + apt.total, 0), dateRange: { from: formatDatePL(firstDay), to: formatDatePL(lastDay) } })
+    } catch (err) { showToast('Blad raportu: ' + err.message, 'error') }
+    finally { setLoading(false) }
   }
 
-  // Export Analysis to Excel
-  const exportAnalysisToExcel = () => {
-    if (!analysisData) return
-    
-    const headers = ['Apartament', ...analysisData.months.map(m => m.shortLabel), 'Suma wejść']
-    const rows = analysisData.apartments.map(apt => [
-      apt.name,
-      ...analysisData.months.map(m => apt.months[m.value]),
-      apt.total
-    ])
-    
-    // Add totals row
-    rows.push([
-      'SUMA',
-      ...analysisData.months.map(m => analysisData.monthTotals[m.value]),
-      analysisData.grandTotal
-    ])
-    
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'Analiza')
-    XLSX.writeFile(wb, `analiza_${analysisMonthFrom}_${analysisMonthTo}.xlsx`)
-    showToast('Raport wyeksportowany do Excel', 'success')
-  }
-
-  // Export Analysis to PDF
-  const exportAnalysisToPDF = () => {
-    if (!analysisData) return
-    
-    const doc = new jsPDF('landscape')
-    
-    doc.setFont('helvetica', 'bold')
-    doc.setFontSize(16)
-    doc.text('ANALIZA - Raport miesieczny', 20, 20)
-    
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(10)
-    doc.text(`Okres: ${analysisMonthFrom} - ${analysisMonthTo}`, 20, 30)
-    doc.text(`Wygenerowano: ${new Date().toLocaleString('pl-PL')}`, 20, 36)
-    
-    // Summary
-    doc.setFont('helvetica', 'bold')
-    doc.text(`Laczna liczba wejsc: ${analysisData.grandTotal}`, 20, 46)
-    
-    let yPos = 60
-    
-    // Table header
-    doc.setFontSize(8)
-    doc.setFont('helvetica', 'bold')
-    let xPos = 20
-    doc.text('Apartament', xPos, yPos)
-    xPos += 35
-    
-    analysisData.months.forEach(m => {
-      doc.text(m.shortLabel, xPos, yPos)
-      xPos += 22
-    })
-    doc.text('Suma', xPos, yPos)
-    
-    yPos += 8
-    doc.setFont('helvetica', 'normal')
-    
-    // Data rows
-    analysisData.apartments.forEach(apt => {
-      if (yPos > 180) {
-        doc.addPage()
-        yPos = 20
-      }
-      
-      xPos = 20
-      doc.text(apt.name, xPos, yPos)
-      xPos += 35
-      
-      analysisData.months.forEach(m => {
-        doc.text(String(apt.months[m.value]), xPos, yPos)
-        xPos += 22
-      })
-      doc.text(String(apt.total), xPos, yPos)
-      
-      yPos += 6
-    })
-    
-    // Totals row
-    yPos += 4
-    doc.setFont('helvetica', 'bold')
-    xPos = 20
-    doc.text('SUMA', xPos, yPos)
-    xPos += 35
-    
-    analysisData.months.forEach(m => {
-      doc.text(String(analysisData.monthTotals[m.value]), xPos, yPos)
-      xPos += 22
-    })
-    doc.text(String(analysisData.grandTotal), xPos, yPos)
-    
-    doc.save(`analiza_${analysisMonthFrom}_${analysisMonthTo}.pdf`)
-    showToast('Raport wyeksportowany do PDF', 'success')
-  }
-
-  // ============ OTHER EXPORT FUNCTIONS ============
-
-  // Export to Excel
-  const exportToExcel = async (reportType) => {
+  const exportToExcel = async () => {
     try {
-      let exportData
-      let filename
-      
-      if (reportType === 'completed') {
-        const res = await getCompletedReservations()
-        const activeRes = res.filter(r => r.status === 'active')
-        exportData = activeRes.map(r => ({
-          'Data': formatDatePL(r.date),
-          'Godzina': `${r.hour}:00`,
-          'Użytkownik': r.user_code,
-          'Status': 'Zarezerwowane'
-        }))
-        filename = 'raport_zrealizowane.xlsx'
-      } else {
-        const evt = await getEvents(dateFrom || null, dateTo || null)
-        exportData = evt.map(e => ({
-          'Data zdarzenia': new Date(e.created_at).toLocaleString('pl-PL'),
-          'Typ': e.type === 'reservation' ? 'Rezerwacja' : 
-                 e.type === 'cancellation' ? 'Odwołanie' : 
-                 e.type === 'admin-cancel' ? 'Odwołanie (Admin)' :
-                 e.type === 'admin-booking' ? 'Rezerwacja (Admin)' : e.type,
-          'Użytkownik': e.user_code,
-          'Data rezerwacji': formatDatePL(e.date),
-          'Godzina': `${e.hour}:00`,
-          'Admin': e.admin_user || '-'
-        }))
-        filename = 'raport_pelny.xlsx'
-      }
-
+      const data = await getReservationsByDateRange(dateFrom || null, dateTo || null)
+      const exportData = data.map(r => ({ 'Data': r.date, 'Godzina': `${r.hour}:00`, 'Apartament': r.user_code, 'Status': r.status === 'active' ? 'Aktywna' : 'Anulowana', 'Notatka': r.note || '', 'Admin': r.created_by || '-' }))
       const ws = XLSX.utils.json_to_sheet(exportData)
       const wb = XLSX.utils.book_new()
-      XLSX.utils.book_append_sheet(wb, ws, 'Raport')
-      XLSX.writeFile(wb, filename)
-      showToast('Raport wyeksportowany do Excel', 'success')
-    } catch (err) {
-      showToast('Błąd eksportu: ' + err.message, 'error')
-    }
+      XLSX.utils.book_append_sheet(wb, ws, 'Rezerwacje')
+      XLSX.writeFile(wb, `rezerwacje_${dateFrom || 'all'}_${dateTo || 'all'}.xlsx`)
+      showToast('Excel wyeksportowany!', 'success')
+    } catch (err) { showToast('Blad eksportu: ' + err.message, 'error') }
   }
 
-  // Export to PDF
-  const exportToPDF = async (reportType) => {
-    try {
-      const doc = new jsPDF()
-      
+  const exportAnalysisToPDF = () => {
+    if (!analysisData) return
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const margin = 8
+    const numMonths = analysisData.months.length
+    const fontSize = numMonths > 6 ? 6 : 8
+    const rowHeight = numMonths > 6 ? 4.5 : 5.5
+    const apartmentColWidth = 30
+    const totalColWidth = 12
+    const availableWidth = pageWidth - 2 * margin - apartmentColWidth - totalColWidth
+    const monthColWidth = Math.min(availableWidth / numMonths, 18)
+    
+    doc.setFontSize(12)
+    doc.setFont('helvetica', 'bold')
+    doc.text('Raport rezerwacji Wellness', pageWidth / 2, margin + 4, { align: 'center' })
+    doc.setFontSize(9)
+    doc.setFont('helvetica', 'normal')
+    doc.text(`Okres: ${analysisData.dateRange.from} - ${analysisData.dateRange.to}`, pageWidth / 2, margin + 9, { align: 'center' })
+    
+    let startY = margin + 14
+    let startX = margin
+    
+    doc.setFillColor(34, 197, 94)
+    doc.rect(startX, startY, apartmentColWidth + numMonths * monthColWidth + totalColWidth, rowHeight + 1, 'F')
+    doc.setTextColor(255, 255, 255)
+    doc.setFontSize(fontSize)
+    doc.setFont('helvetica', 'bold')
+    doc.text('Apartament', startX + 1, startY + rowHeight - 0.5)
+    
+    let xPos = startX + apartmentColWidth
+    analysisData.months.forEach(month => {
+      doc.text(month.shortLabel.substring(0, 7), xPos + monthColWidth / 2, startY + rowHeight - 0.5, { align: 'center' })
+      xPos += monthColWidth
+    })
+    doc.text('Suma', xPos + totalColWidth / 2, startY + rowHeight - 0.5, { align: 'center' })
+    
+    startY += rowHeight + 1
+    doc.setTextColor(0, 0, 0)
+    doc.setFont('helvetica', 'normal')
+    
+    analysisData.apartmentData.forEach((apt, index) => {
+      if (index % 2 === 0) { doc.setFillColor(240, 253, 244); doc.rect(startX, startY, apartmentColWidth + numMonths * monthColWidth + totalColWidth, rowHeight, 'F') }
+      doc.text(apt.apartment, startX + 1, startY + rowHeight - 1)
+      xPos = startX + apartmentColWidth
+      apt.monthlyData.forEach(m => { doc.text(String(m.count), xPos + monthColWidth / 2, startY + rowHeight - 1, { align: 'center' }); xPos += monthColWidth })
       doc.setFont('helvetica', 'bold')
-      doc.setFontSize(18)
-      doc.text(reportType === 'completed' ? 'Raport - Zrealizowane' : 'Raport - Full', 20, 20)
-      
+      doc.text(String(apt.total), xPos + totalColWidth / 2, startY + rowHeight - 1, { align: 'center' })
       doc.setFont('helvetica', 'normal')
-      doc.setFontSize(10)
-      doc.text(`Wygenerowano: ${new Date().toLocaleString('pl-PL')}`, 20, 30)
-      
-      if (dateFrom || dateTo) {
-        doc.text(`Okres: ${dateFrom || 'poczatek'} - ${dateTo || 'koniec'}`, 20, 38)
-      }
-      
-      let yPos = 50
-      
-      if (reportType === 'completed') {
-        const res = await getCompletedReservations()
-        const activeRes = res.filter(r => r.status === 'active')
-        const summary = getSummaryByApartment(res)
-        
-        doc.setFont('helvetica', 'bold')
-        doc.text(`Lacznie wejsc: ${activeRes.length}`, 20, yPos)
-        yPos += 15
-        
-        doc.setFontSize(12)
-        doc.text('Podsumowanie wg apartamentow:', 20, yPos)
-        yPos += 10
-        
-        doc.setFont('helvetica', 'normal')
-        doc.setFontSize(10)
-        Object.entries(summary).forEach(([apt, count]) => {
-          if (count > 0) {
-            doc.text(`${apt}: ${count} wejsc`, 25, yPos)
-            yPos += 6
-            if (yPos > 270) {
-              doc.addPage()
-              yPos = 20
-            }
-          }
-        })
-      } else {
-        const evt = await getEvents(dateFrom || null, dateTo || null)
-        evt.forEach(e => {
-          const typeText = e.type === 'reservation' ? 'Rezerwacja' : 
-                          e.type === 'cancellation' ? 'Odwolanie' : 
-                          e.type === 'admin-cancel' ? 'Odwolanie (Admin)' :
-                          e.type === 'admin-booking' ? 'Rezerwacja (Admin)' : e.type
-          const text = `${new Date(e.created_at).toLocaleString('pl-PL')} - ${typeText} - ${e.user_code} - ${e.hour}:00`
-          doc.text(text, 20, yPos)
-          yPos += 8
-          if (yPos > 270) {
-            doc.addPage()
-            yPos = 20
-          }
-        })
-      }
-      
-      doc.save(reportType === 'completed' ? 'raport_zrealizowane.pdf' : 'raport_pelny.pdf')
-      showToast('Raport wyeksportowany do PDF', 'success')
-    } catch (err) {
-      showToast('Błąd eksportu: ' + err.message, 'error')
-    }
+      startY += rowHeight
+    })
+    
+    doc.setFillColor(34, 197, 94)
+    doc.rect(startX, startY, apartmentColWidth + numMonths * monthColWidth + totalColWidth, rowHeight + 1, 'F')
+    doc.setTextColor(255, 255, 255)
+    doc.setFont('helvetica', 'bold')
+    doc.text('SUMA', startX + 1, startY + rowHeight - 0.5)
+    xPos = startX + apartmentColWidth
+    analysisData.monthlyTotals.forEach(m => { doc.text(String(m.total), xPos + monthColWidth / 2, startY + rowHeight - 0.5, { align: 'center' }); xPos += monthColWidth })
+    doc.text(String(analysisData.grandTotal), xPos + totalColWidth / 2, startY + rowHeight - 0.5, { align: 'center' })
+    
+    doc.setTextColor(128, 128, 128)
+    doc.setFontSize(7)
+    doc.setFont('helvetica', 'normal')
+    doc.text(`Wygenerowano: ${new Date().toLocaleString('pl-PL')} | Admin: ${user}`, pageWidth / 2, pageHeight - 4, { align: 'center' })
+    
+    doc.save(`raport_wellness_${analysisMonthFrom}_${analysisMonthTo}.pdf`)
+    showToast('PDF wygenerowany!', 'success')
   }
 
-  // Get active reservations for reports
-  const [reportReservations, setReportReservations] = useState([])
-  
-  useEffect(() => {
-    if (activeTab === 'completed') {
-      getCompletedReservations().then(res => {
-        setReportReservations(res.filter(r => r.status === 'active'))
-      })
-    }
-  }, [activeTab, dateFrom, dateTo])
-
-  const monthOptions = generateMonthOptions()
-
-  if (loading && activeTab !== 'analysis') {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="loader"></div>
-      </div>
-    )
+  const exportAnalysisToExcel = () => {
+    if (!analysisData) return
+    const headers = ['Apartament', ...analysisData.months.map(m => m.shortLabel), 'Suma']
+    const data = analysisData.apartmentData.map(apt => [apt.apartment, ...apt.monthlyData.map(m => m.count), apt.total])
+    data.push(['SUMA', ...analysisData.monthlyTotals.map(m => m.total), analysisData.grandTotal])
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...data])
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Raport')
+    XLSX.writeFile(wb, `raport_wellness_${analysisMonthFrom}_${analysisMonthTo}.xlsx`)
+    showToast('Excel wygenerowany!', 'success')
   }
+
+  if (loading && reservations.length === 0) return <div className="flex-1 flex items-center justify-center"><div className="loader"></div></div>
 
   return (
-    <div className="flex-1 p-6 md:p-10 max-w-7xl mx-auto w-full">
-      {/* Tabs */}
-      <div className="flex flex-wrap gap-3 mb-8">
-        {[
-          { id: 'calendar', label: '📅 Kalendarz' },
-          { id: 'completed', label: '✅ Zrealizowane' },
-          { id: 'analysis', label: '📈 Analiza' },
-          { id: 'full', label: '📊 Full Raport' },
-          { id: 'audit', label: '🔍 Audit Log' }
-        ].map(tab => (
-          <button
-            key={tab.id}
-            className={`px-6 py-3 rounded-full font-semibold transition-all ${
-              activeTab === tab.id
-                ? 'bg-gradient-to-r from-green-500 to-green-700 text-white'
-                : 'bg-white border-2 border-green-200 text-green-800 hover:border-green-400'
-            }`}
-            onClick={() => setActiveTab(tab.id)}
-          >
-            {tab.label}
-          </button>
+    <div className="flex-1 p-4 md:p-8">
+      <div className="flex flex-wrap gap-2 mb-6">
+        {[{ id: 'calendar', label: '📅 Kalendarz' }, { id: 'blocked', label: '🚫 Blokady' }, { id: 'stats', label: '📊 Statystyki' }, { id: 'history', label: '📋 Historia' }, { id: 'analysis', label: '📈 Raport' }, { id: 'errors', label: '⚠️ Bledy' }].map(tab => (
+          <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`px-4 py-2 rounded-xl font-semibold transition-all ${activeTab === tab.id ? 'bg-green-500 text-white shadow-lg' : 'bg-white text-green-700 border-2 border-green-200 hover:border-green-400'}`}>{tab.label}</button>
         ))}
       </div>
 
-      {/* Calendar Tab - Updated with unlimited date navigation */}
       {activeTab === 'calendar' && (
-        <div className="bg-white rounded-3xl p-8 shadow-xl border-2 border-green-200">
-          <h2 className="font-display text-2xl text-green-800 mb-6">📅 Podgląd rezerwacji</h2>
-          
-          {/* Date Navigation */}
-          <div className="flex flex-wrap items-center gap-4 mb-6 p-4 bg-green-50 rounded-xl">
-            <button
-              className="px-4 py-2 bg-white border-2 border-green-400 rounded-lg font-semibold text-green-800 hover:bg-green-400 hover:text-white transition-all"
-              onClick={() => setAdminCalendarDate(addDays(adminCalendarDate, -7))}
-            >
-              ← Poprzedni tydzień
-            </button>
-            <button
-              className="px-4 py-2 bg-green-500 text-white rounded-lg font-semibold hover:bg-green-600 transition-all"
-              onClick={() => setAdminCalendarDate(today)}
-            >
-              Dziś
-            </button>
-            <button
-              className="px-4 py-2 bg-white border-2 border-green-400 rounded-lg font-semibold text-green-800 hover:bg-green-400 hover:text-white transition-all"
-              onClick={() => setAdminCalendarDate(addDays(adminCalendarDate, 7))}
-            >
-              Następny tydzień →
-            </button>
-            <input
-              type="date"
-              className="px-4 py-2 border-2 border-green-200 rounded-lg focus:outline-none focus:border-green-400"
-              value={formatDate(adminCalendarDate)}
-              onChange={(e) => setAdminCalendarDate(parseDate(e.target.value))}
-            />
+        <div className="bg-white rounded-3xl p-6 md:p-8 shadow-xl border-2 border-green-200">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+            <h2 className="font-display text-2xl text-green-800">📅 Zarzadzanie rezerwacjami</h2>
+            <div className="flex gap-2">
+              <button className="px-4 py-2 bg-green-100 text-green-800 rounded-lg font-semibold hover:bg-green-200" onClick={() => setAdminCalendarDate(addDays(adminCalendarDate, -7))}>← Tydz</button>
+              <button className="px-4 py-2 bg-green-500 text-white rounded-lg font-semibold hover:bg-green-600" onClick={() => setAdminCalendarDate(today)}>Dzis</button>
+              <button className="px-4 py-2 bg-green-100 text-green-800 rounded-lg font-semibold hover:bg-green-200" onClick={() => setAdminCalendarDate(addDays(adminCalendarDate, 7))}>Tydz →</button>
+            </div>
           </div>
-          
-          <div className="space-y-6">
-            {getAdminDisplayDates().map(date => {
-              const dayReservations = getReservationsForDate(date)
-              const isPast = date < today
-              return (
-                <div 
-                  key={formatDate(date)} 
-                  className={`rounded-2xl p-6 border-2 ${isPast ? 'bg-gray-50 border-gray-200' : 'bg-green-50 border-green-200'}`}
-                >
-                  <h3 className={`font-display text-xl mb-4 ${isPast ? 'text-gray-600' : 'text-green-800'}`}>
-                    {formatDatePL(date)} {isSameDay(date, today) && '(dziś)'}
-                    {isPast && ' - miniony'}
-                  </h3>
-                  
-                  {TIME_SLOTS.filter(s => s.bookable).map(slot => {
-                    const reservation = dayReservations.find(r => r.hour === slot.hour)
-                    const canBook = !isPast && !reservation
-                    return (
-                      <div 
-                        key={slot.hour} 
-                        className="flex flex-col sm:flex-row justify-between items-start sm:items-center p-4 bg-white rounded-xl mb-3 gap-3"
-                      >
-                        <div className="flex gap-6 items-center">
-                          <span className="font-bold text-green-800 w-20">{slot.hour}:00</span>
-                          <span className={reservation ? 'text-green-700 font-semibold' : 'text-gray-400'}>
-                            {reservation ? reservation.user_code : 'Wolne'}
-                          </span>
+          <div className="overflow-x-auto">
+            <div className="grid grid-cols-8 gap-2 min-w-[800px]">
+              <div className="p-3 font-bold text-green-800 text-center">Godz.</div>
+              {getAdminDisplayDates().map(date => (
+                <div key={date.toISOString()} className={`p-3 font-bold text-center rounded-xl ${isSameDay(date, today) ? 'bg-green-500 text-white' : 'bg-green-100 text-green-800'}`}>
+                  <div>{formatDatePL(date)}</div>
+                  <div className="text-xs opacity-75">{['Nd', 'Pn', 'Wt', 'Sr', 'Cz', 'Pt', 'So'][date.getDay()]}</div>
+                </div>
+              ))}
+              {TIME_SLOTS.filter(s => s.bookable).map(slot => (
+                <div key={`row-${slot.hour}`} className="contents">
+                  <div className="p-3 font-bold text-green-800 text-center bg-green-50 rounded-xl">{slot.hour}:00</div>
+                  {getAdminDisplayDates().map(date => {
+                    const reservation = getReservationsForDate(date).find(r => r.hour === slot.hour)
+                    const blocked = getBlockedSlotInfo(date, slot.hour)
+                    if (blocked) return (
+                      <div key={`${date.toISOString()}-${slot.hour}`} className="p-2 bg-orange-100 border-2 border-orange-300 rounded-xl text-center cursor-pointer hover:bg-orange-200" onClick={() => handleUnblockSlot(blocked)} title={`Zablokowane przez: ${blocked.created_by}`}>
+                        <div className="text-orange-800 font-semibold text-sm">🚫 ZABLOK.</div>
+                        <div className="text-orange-600 text-xs truncate">{blocked.reason}</div>
+                        <div className="text-orange-500 text-xs">({blocked.created_by})</div>
+                      </div>
+                    )
+                    if (reservation) return (
+                      <div key={`${date.toISOString()}-${slot.hour}`} className="p-2 bg-green-100 border-2 border-green-300 rounded-xl">
+                        <div className="text-green-800 font-semibold text-sm truncate">{reservation.user_code}</div>
+                        {reservation.created_by && <div className="text-blue-600 text-xs">Admin: {reservation.created_by}</div>}
+                        {reservation.note && <div className="text-gray-500 text-xs truncate" title={reservation.note}>📝 {reservation.note}</div>}
+                        <div className="flex gap-1 mt-1">
+                          <button className="flex-1 px-2 py-1 bg-blue-500 text-white rounded text-xs hover:bg-blue-600" onClick={() => handleEditNote(reservation)}>📝</button>
+                          <button className="flex-1 px-2 py-1 bg-red-500 text-white rounded text-xs hover:bg-red-600" onClick={() => handleAdminCancel(reservation)}>✕</button>
                         </div>
-                        <div className="flex gap-2">
-                          {canBook && (
-                            <button
-                              className="px-4 py-2 bg-green-50 text-green-700 rounded-lg font-semibold hover:bg-green-600 hover:text-white transition-all text-sm"
-                              onClick={() => handleAdminBooking(date, slot.hour)}
-                            >
-                              + Rezerwuj
-                            </button>
-                          )}
-                          {reservation && !isPast && (
-                            <button
-                              className="px-4 py-2 bg-red-50 text-red-700 rounded-lg font-semibold hover:bg-red-600 hover:text-white transition-all text-sm"
-                              onClick={() => handleAdminCancel(reservation)}
-                            >
-                              Odwołaj
-                            </button>
-                          )}
+                      </div>
+                    )
+                    return (
+                      <div key={`${date.toISOString()}-${slot.hour}`} className="p-2 bg-gray-50 border-2 border-gray-200 rounded-xl text-center">
+                        <div className="flex flex-col gap-1">
+                          <button className="w-full px-2 py-1 bg-green-500 text-white rounded text-xs hover:bg-green-600" onClick={() => handleAdminBooking(date, slot.hour)}>+ Rezerwuj</button>
+                          <button className="w-full px-2 py-1 bg-orange-500 text-white rounded text-xs hover:bg-orange-600" onClick={() => handleBlockSlot(date, slot.hour)}>🚫 Blokuj</button>
                         </div>
                       </div>
                     )
                   })}
-                  
-                  <div className="p-4 bg-green-100 rounded-xl italic text-green-700">
-                    <span className="font-bold">20:00 - 21:00</span> — OTWARTE DLA POZOSTAŁYCH
-                  </div>
                 </div>
-              )
-            })}
+              ))}
+            </div>
           </div>
         </div>
       )}
 
-      {/* Completed Tab */}
-      {activeTab === 'completed' && (
-        <div className="bg-white rounded-3xl p-8 shadow-xl border-2 border-green-200">
-          <h2 className="font-display text-2xl text-green-800 mb-6">✅ Raport - Zrealizowane</h2>
-          
-          {/* Filters */}
-          <div className="flex flex-wrap gap-4 mb-8 items-end">
-            <div className="flex flex-col gap-2">
-              <label className="font-semibold text-green-800 text-sm">Od daty</label>
-              <input
-                type="date"
-                className="px-4 py-3 border-2 border-green-200 rounded-xl focus:outline-none focus:border-green-400"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-              />
+      {activeTab === 'blocked' && (
+        <div className="bg-white rounded-3xl p-8 shadow-xl border-2 border-orange-200">
+          <h2 className="font-display text-2xl text-orange-800 mb-6">🚫 Zablokowane terminy</h2>
+          {blockedSlots.length === 0 ? <div className="text-center py-10 text-gray-500">Brak zablokowanych terminow</div> : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead><tr className="bg-orange-100"><th className="p-4 text-left font-bold text-orange-800">Data</th><th className="p-4 text-left font-bold text-orange-800">Godzina</th><th className="p-4 text-left font-bold text-orange-800">Powod</th><th className="p-4 text-left font-bold text-orange-800">Zablokowal</th><th className="p-4 text-left font-bold text-orange-800">Akcja</th></tr></thead>
+                <tbody>{blockedSlots.map(slot => (
+                  <tr key={slot.id} className="border-b-2 border-orange-100 hover:bg-orange-50">
+                    <td className="p-4">{formatDatePL(slot.date)}</td><td className="p-4">{slot.hour}:00</td><td className="p-4">{slot.reason}</td><td className="p-4 font-semibold">{slot.created_by}</td>
+                    <td className="p-4"><button className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600" onClick={() => handleUnblockSlot(slot)}>Odblokuj</button></td>
+                  </tr>
+                ))}</tbody>
+              </table>
             </div>
-            <div className="flex flex-col gap-2">
-              <label className="font-semibold text-green-800 text-sm">Do daty</label>
-              <input
-                type="date"
-                className="px-4 py-3 border-2 border-green-200 rounded-xl focus:outline-none focus:border-green-400"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-              />
-            </div>
-            <button 
-              className="px-6 py-3 bg-white border-2 border-green-400 rounded-xl font-semibold text-green-800 hover:bg-green-400 hover:text-white transition-all"
-              onClick={() => exportToExcel('completed')}
-            >
-              📥 Export Excel
-            </button>
-            <button 
-              className="px-6 py-3 bg-white border-2 border-green-400 rounded-xl font-semibold text-green-800 hover:bg-green-400 hover:text-white transition-all"
-              onClick={() => exportToPDF('completed')}
-            >
-              📄 Export PDF
-            </button>
-          </div>
+          )}
+        </div>
+      )}
 
-          {/* Summary */}
-          <div className="bg-green-100 rounded-2xl p-6 mb-8 border-2 border-green-200">
-            <h3 className="font-display text-xl text-green-800 mb-4">Podsumowanie</h3>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-              <div className="bg-white p-4 rounded-xl text-center">
-                <div className="text-3xl font-bold text-green-800">{reportReservations.length}</div>
-                <div className="text-sm text-green-600 mt-1">Łącznie wejść</div>
+      {activeTab === 'stats' && (
+        <div className="bg-white rounded-3xl p-8 shadow-xl border-2 border-blue-200">
+          <h2 className="font-display text-2xl text-blue-800 mb-6">📊 Statystyki</h2>
+          <div className="flex flex-wrap gap-4 mb-6">
+            <div><label className="block text-sm font-semibold text-gray-700 mb-1">Od</label><input type="date" value={statsDateFrom} onChange={(e) => setStatsDateFrom(e.target.value)} className="px-4 py-2 border-2 border-blue-200 rounded-xl focus:outline-none focus:border-blue-400" /></div>
+            <div><label className="block text-sm font-semibold text-gray-700 mb-1">Do</label><input type="date" value={statsDateTo} onChange={(e) => setStatsDateTo(e.target.value)} className="px-4 py-2 border-2 border-blue-200 rounded-xl focus:outline-none focus:border-blue-400" /></div>
+            <div className="flex items-end"><button className="px-6 py-2 bg-blue-500 text-white rounded-xl font-semibold hover:bg-blue-600" onClick={loadStatistics}>Generuj</button></div>
+          </div>
+          {statistics && (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+                <div className="bg-green-100 rounded-2xl p-6 text-center"><div className="text-4xl font-bold text-green-800">{statistics.totalActive}</div><div className="text-green-600">Aktywnych</div></div>
+                <div className="bg-red-100 rounded-2xl p-6 text-center"><div className="text-4xl font-bold text-red-800">{statistics.totalCancelled}</div><div className="text-red-600">Anulowanych ({statistics.cancellationRate}%)</div></div>
+                <div className="bg-blue-100 rounded-2xl p-6 text-center"><div className="text-4xl font-bold text-blue-800">{statistics.mostPopularHour[0]}:00</div><div className="text-blue-600">Popularna godzina</div></div>
+                <div className="bg-purple-100 rounded-2xl p-6 text-center"><div className="text-4xl font-bold text-purple-800">{statistics.adminBookings}</div><div className="text-purple-600">Rez. przez admina</div></div>
               </div>
-              {Object.entries(getSummaryByApartment(reportReservations))
-                .filter(([_, count]) => count > 0)
-                .map(([apt, count]) => (
-                  <div key={apt} className="bg-white p-4 rounded-xl text-center">
-                    <div className="text-2xl font-bold text-green-800">{count}</div>
-                    <div className="text-xs text-green-600 mt-1">{apt}</div>
-                  </div>
-                ))
-              }
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="bg-gray-50 rounded-2xl p-6">
+                  <h3 className="font-bold text-gray-800 mb-4">Wg dnia tygodnia</h3>
+                  <div className="space-y-2">{DAYS_PL_FULL.map((day, idx) => {
+                    const count = statistics.byDayOfWeek[idx]; const maxCount = Math.max(...statistics.byDayOfWeek, 1)
+                    return (<div key={day} className="flex items-center gap-2"><div className="w-24 text-sm text-gray-600">{day}</div><div className="flex-1 bg-gray-200 rounded-full h-6"><div className="bg-blue-500 rounded-full h-6 flex items-center justify-end pr-2" style={{ width: `${Math.max((count / maxCount) * 100, 10)}%` }}><span className="text-white text-xs font-bold">{count}</span></div></div></div>)
+                  })}</div>
+                </div>
+                <div className="bg-gray-50 rounded-2xl p-6">
+                  <h3 className="font-bold text-gray-800 mb-4">Wg godziny</h3>
+                  <div className="space-y-2">{TIME_SLOTS.filter(s => s.bookable).map(slot => {
+                    const count = statistics.byHour[slot.hour] || 0; const maxCount = Math.max(...Object.values(statistics.byHour), 1)
+                    return (<div key={slot.hour} className="flex items-center gap-2"><div className="w-16 text-sm text-gray-600">{slot.hour}:00</div><div className="flex-1 bg-gray-200 rounded-full h-6"><div className="bg-green-500 rounded-full h-6 flex items-center justify-end pr-2" style={{ width: `${Math.max((count / maxCount) * 100, 10)}%` }}><span className="text-white text-xs font-bold">{count}</span></div></div></div>)
+                  })}</div>
+                </div>
+                <div className="bg-gray-50 rounded-2xl p-6 lg:col-span-2">
+                  <h3 className="font-bold text-gray-800 mb-4">Top 5 apartamentow</h3>
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4">{statistics.topApartments.map(([apt, count], idx) => (
+                    <div key={apt} className="bg-white rounded-xl p-4 text-center shadow"><div className="text-2xl mb-2">{['🥇', '🥈', '🥉', '4️⃣', '5️⃣'][idx]}</div><div className="font-bold text-gray-800 text-sm">{apt}</div><div className="text-2xl font-bold text-green-600">{count}</div></div>
+                  ))}</div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'history' && (
+        <div className="bg-white rounded-3xl p-8 shadow-xl border-2 border-purple-200">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+            <h2 className="font-display text-2xl text-purple-800">📋 Historia zdarzen</h2>
+            <div className="flex flex-wrap gap-2">
+              <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="px-4 py-2 border-2 border-purple-200 rounded-xl" />
+              <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="px-4 py-2 border-2 border-purple-200 rounded-xl" />
+              <button className="px-4 py-2 bg-purple-500 text-white rounded-xl font-semibold hover:bg-purple-600" onClick={loadData}>Filtruj</button>
+              <button className="px-4 py-2 bg-green-500 text-white rounded-xl font-semibold hover:bg-green-600" onClick={exportToExcel}>📊 Excel</button>
             </div>
           </div>
-
-          {/* Table */}
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead>
-                <tr className="bg-green-100">
-                  <th className="p-4 text-left font-bold text-green-800 uppercase text-sm">Data</th>
-                  <th className="p-4 text-left font-bold text-green-800 uppercase text-sm">Godzina</th>
-                  <th className="p-4 text-left font-bold text-green-800 uppercase text-sm">Użytkownik</th>
+              <thead><tr className="bg-purple-100"><th className="p-4 text-left font-bold text-purple-800 text-sm">Data</th><th className="p-4 text-left font-bold text-purple-800 text-sm">Typ</th><th className="p-4 text-left font-bold text-purple-800 text-sm">Apartament</th><th className="p-4 text-left font-bold text-purple-800 text-sm">Termin</th><th className="p-4 text-left font-bold text-purple-800 text-sm">Admin</th><th className="p-4 text-left font-bold text-purple-800 text-sm">Notatka</th></tr></thead>
+              <tbody>{events.map(e => (
+                <tr key={e.id} className="border-b-2 border-purple-100 hover:bg-purple-50">
+                  <td className="p-4">{new Date(e.created_at).toLocaleString('pl-PL')}</td>
+                  <td className="p-4"><span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${e.type === 'reservation' ? 'bg-green-100 text-green-800' : e.type === 'admin-booking' ? 'bg-blue-100 text-blue-800' : e.type === 'cancellation' ? 'bg-red-100 text-red-800' : e.type === 'admin-cancel' ? 'bg-orange-100 text-orange-800' : e.type === 'block' ? 'bg-gray-100 text-gray-800' : 'bg-gray-100 text-gray-800'}`}>
+                    {e.type === 'reservation' ? 'Rezerwacja' : e.type === 'admin-booking' ? 'Rez. (Admin)' : e.type === 'cancellation' ? 'Odwolanie' : e.type === 'admin-cancel' ? 'Odw. (Admin)' : e.type === 'block' ? 'Blokada' : e.type === 'unblock' ? 'Odblokowanie' : e.type}
+                  </span></td>
+                  <td className="p-4">{e.user_code || '-'}</td>
+                  <td className="p-4">{formatDatePL(e.date)}, {e.hour}:00</td>
+                  <td className="p-4 font-semibold text-blue-600">{e.admin_user || '-'}</td>
+                  <td className="p-4 text-sm text-gray-600">{e.note || '-'}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {reportReservations.map(r => (
-                  <tr key={r.id} className="border-b-2 border-green-100 hover:bg-green-50">
-                    <td className="p-4">{formatDatePL(r.date)}</td>
-                    <td className="p-4">{r.hour}:00</td>
-                    <td className="p-4">{r.user_code}</td>
-                  </tr>
-                ))}
-              </tbody>
+              ))}</tbody>
             </table>
           </div>
         </div>
       )}
 
-      {/* Analysis Tab - NEW */}
       {activeTab === 'analysis' && (
-        <div className="bg-white rounded-3xl p-8 shadow-xl border-2 border-green-200">
-          <h2 className="font-display text-2xl text-green-800 mb-6">📈 Analiza - Raport miesięczny</h2>
-          
-          {/* Month Filters */}
-          <div className="flex flex-wrap gap-4 mb-8 items-end">
-            <div className="flex flex-col gap-2">
-              <label className="font-semibold text-green-800 text-sm">Od miesiąca</label>
-              <select
-                className="px-4 py-3 border-2 border-green-200 rounded-xl focus:outline-none focus:border-green-400 bg-white min-w-[200px]"
-                value={analysisMonthFrom}
-                onChange={(e) => setAnalysisMonthFrom(e.target.value)}
-              >
-                <option value="">Wybierz miesiąc</option>
-                {monthOptions.map(opt => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-            </div>
-            <div className="flex flex-col gap-2">
-              <label className="font-semibold text-green-800 text-sm">Do miesiąca</label>
-              <select
-                className="px-4 py-3 border-2 border-green-200 rounded-xl focus:outline-none focus:border-green-400 bg-white min-w-[200px]"
-                value={analysisMonthTo}
-                onChange={(e) => setAnalysisMonthTo(e.target.value)}
-              >
-                <option value="">Wybierz miesiąc</option>
-                {monthOptions.map(opt => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-            </div>
-            <button 
-              className="px-6 py-3 bg-gradient-to-r from-green-500 to-green-700 text-white rounded-xl font-semibold hover:shadow-lg transition-all"
-              onClick={loadAnalysisData}
-            >
-              🔍 Generuj raport
-            </button>
-            {analysisData && (
-              <>
-                <button 
-                  className="px-6 py-3 bg-white border-2 border-green-400 rounded-xl font-semibold text-green-800 hover:bg-green-400 hover:text-white transition-all"
-                  onClick={exportAnalysisToExcel}
-                >
-                  📥 Export Excel
-                </button>
-                <button 
-                  className="px-6 py-3 bg-white border-2 border-green-400 rounded-xl font-semibold text-green-800 hover:bg-green-400 hover:text-white transition-all"
-                  onClick={exportAnalysisToPDF}
-                >
-                  📄 Export PDF
-                </button>
-              </>
-            )}
+        <div className="bg-white rounded-3xl p-8 shadow-xl border-2 border-indigo-200">
+          <h2 className="font-display text-2xl text-indigo-800 mb-6">📈 Raport miesieczny</h2>
+          <div className="flex flex-wrap gap-4 mb-6">
+            <div><label className="block text-sm font-semibold text-gray-700 mb-1">Od</label><select value={analysisMonthFrom} onChange={(e) => setAnalysisMonthFrom(e.target.value)} className="px-4 py-2 border-2 border-indigo-200 rounded-xl bg-white"><option value="">Wybierz...</option>{generateMonthOptions().map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</select></div>
+            <div><label className="block text-sm font-semibold text-gray-700 mb-1">Do</label><select value={analysisMonthTo} onChange={(e) => setAnalysisMonthTo(e.target.value)} className="px-4 py-2 border-2 border-indigo-200 rounded-xl bg-white"><option value="">Wybierz...</option>{generateMonthOptions().map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</select></div>
+            <div className="flex items-end"><button className="px-6 py-2 bg-indigo-500 text-white rounded-xl font-semibold hover:bg-indigo-600" onClick={loadAnalysisData}>Generuj raport</button></div>
           </div>
-
-          {loading && (
-            <div className="flex justify-center py-12">
-              <div className="loader"></div>
-            </div>
-          )}
-
-          {analysisData && !loading && (
+          {analysisData && (
             <>
-              {/* Summary */}
-              <div className="bg-green-100 rounded-2xl p-6 mb-8 border-2 border-green-200">
-                <h3 className="font-display text-xl text-green-800 mb-4">Podsumowanie okresu</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  <div className="bg-white p-6 rounded-xl text-center">
-                    <div className="text-4xl font-bold text-green-800">{analysisData.grandTotal}</div>
-                    <div className="text-sm text-green-600 mt-2">Łączna liczba wejść</div>
-                  </div>
-                  <div className="bg-white p-6 rounded-xl text-center">
-                    <div className="text-4xl font-bold text-green-800">{analysisData.months.length}</div>
-                    <div className="text-sm text-green-600 mt-2">Liczba miesięcy</div>
-                  </div>
-                  <div className="bg-white p-6 rounded-xl text-center">
-                    <div className="text-4xl font-bold text-green-800">
-                      {analysisData.months.length > 0 
-                        ? (analysisData.grandTotal / analysisData.months.length).toFixed(1) 
-                        : 0}
-                    </div>
-                    <div className="text-sm text-green-600 mt-2">Średnia wejść/miesiąc</div>
-                  </div>
-                  <div className="bg-white p-6 rounded-xl text-center">
-                    <div className="text-4xl font-bold text-green-800">
-                      {USERS.length > 0 
-                        ? (analysisData.grandTotal / USERS.length).toFixed(1) 
-                        : 0}
-                    </div>
-                    <div className="text-sm text-green-600 mt-2">Średnia wejść/apartament</div>
-                  </div>
-                </div>
+              <div className="flex gap-2 mb-4">
+                <button className="px-4 py-2 bg-red-500 text-white rounded-lg font-semibold hover:bg-red-600" onClick={exportAnalysisToPDF}>📄 PDF</button>
+                <button className="px-4 py-2 bg-green-500 text-white rounded-lg font-semibold hover:bg-green-600" onClick={exportAnalysisToExcel}>📊 Excel</button>
               </div>
-
-              {/* Analysis Table */}
               <div className="overflow-x-auto">
-                <table className="w-full border-collapse">
-                  <thead>
-                    <tr className="bg-green-600 text-white">
-                      <th className="p-4 text-left font-bold uppercase text-sm border border-green-700 sticky left-0 bg-green-600 z-10">
-                        Apartament
-                      </th>
-                      {analysisData.months.map(m => (
-                        <th key={m.value} className="p-4 text-center font-bold uppercase text-sm border border-green-700 min-w-[100px]">
-                          {m.shortLabel}
-                        </th>
-                      ))}
-                      <th className="p-4 text-center font-bold uppercase text-sm border border-green-700 bg-green-700 min-w-[100px]">
-                        Suma wejść
-                      </th>
-                    </tr>
-                  </thead>
+                <table className="w-full text-sm">
+                  <thead><tr className="bg-indigo-100"><th className="p-3 text-left font-bold text-indigo-800">Apartament</th>{analysisData.months.map(m => <th key={m.value} className="p-3 text-center font-bold text-indigo-800">{m.shortLabel}</th>)}<th className="p-3 text-center font-bold text-indigo-800 bg-indigo-200">SUMA</th></tr></thead>
                   <tbody>
-                    {analysisData.apartments.map((apt, idx) => (
-                      <tr key={apt.name} className={idx % 2 === 0 ? 'bg-white' : 'bg-green-50'}>
-                        <td className={`p-4 font-semibold text-green-800 border border-green-200 sticky left-0 z-10 ${idx % 2 === 0 ? 'bg-white' : 'bg-green-50'}`}>
-                          {apt.name}
-                        </td>
-                        {analysisData.months.map(m => (
-                          <td key={m.value} className={`p-4 text-center border border-green-200 ${apt.months[m.value] > 0 ? 'font-semibold text-green-800' : 'text-gray-400'}`}>
-                            {apt.months[m.value]}
-                          </td>
-                        ))}
-                        <td className="p-4 text-center font-bold text-green-800 border border-green-200 bg-green-100">
-                          {apt.total}
-                        </td>
-                      </tr>
-                    ))}
-                    {/* Totals Row */}
-                    <tr className="bg-green-600 text-white font-bold">
-                      <td className="p-4 border border-green-700 sticky left-0 bg-green-600 z-10">
-                        SUMA
-                      </td>
-                      {analysisData.months.map(m => (
-                        <td key={m.value} className="p-4 text-center border border-green-700">
-                          {analysisData.monthTotals[m.value]}
-                        </td>
-                      ))}
-                      <td className="p-4 text-center border border-green-700 bg-green-700 text-xl">
-                        {analysisData.grandTotal}
-                      </td>
-                    </tr>
+                    {analysisData.apartmentData.map((apt, idx) => <tr key={apt.apartment} className={idx % 2 === 0 ? 'bg-indigo-50' : 'bg-white'}><td className="p-3 font-semibold">{apt.apartment}</td>{apt.monthlyData.map(m => <td key={m.month} className="p-3 text-center">{m.count}</td>)}<td className="p-3 text-center font-bold bg-indigo-100">{apt.total}</td></tr>)}
+                    <tr className="bg-indigo-500 text-white"><td className="p-3 font-bold">SUMA</td>{analysisData.monthlyTotals.map(m => <td key={m.month} className="p-3 text-center font-bold">{m.total}</td>)}<td className="p-3 text-center font-bold bg-indigo-600">{analysisData.grandTotal}</td></tr>
                   </tbody>
                 </table>
               </div>
             </>
           )}
+        </div>
+      )}
 
-          {!analysisData && !loading && (
-            <div className="text-center py-12 text-green-600">
-              <p className="text-lg">Wybierz zakres miesięcy i kliknij "Generuj raport"</p>
-            </div>
+      {activeTab === 'errors' && (
+        <div className="bg-white rounded-3xl p-8 shadow-xl border-2 border-red-200">
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="font-display text-2xl text-red-800">⚠️ Bledy aplikacji</h2>
+            <button className="px-4 py-2 bg-red-500 text-white rounded-lg font-semibold hover:bg-red-600" onClick={async () => { try { const data = await getAppErrors(50); setAppErrors(data); showToast('Odswieżone', 'success') } catch (err) { showToast('Blad: ' + err.message, 'error') } }}>🔄 Odswież</button>
+          </div>
+          {appErrors.length === 0 ? <div className="text-center py-10"><div className="text-6xl mb-4">🎉</div><div className="text-gray-500">Kliknij "Odswież" lub brak bledow</div></div> : (
+            <div className="space-y-4">{appErrors.map(err => (
+              <div key={err.id} className="bg-red-50 rounded-xl p-4 border border-red-200">
+                <div className="flex justify-between items-start mb-2"><span className="font-semibold text-red-800">{err.error_type}</span><span className="text-sm text-gray-500">{new Date(err.created_at).toLocaleString('pl-PL')}</span></div>
+                <p className="text-red-700 mb-2 font-mono text-sm">{err.error_message}</p>
+                {err.user_code && <p className="text-sm text-gray-600">👤 {err.user_code}</p>}
+                {err.error_stack && <details className="mt-2"><summary className="text-sm text-gray-500 cursor-pointer">Stack trace</summary><pre className="mt-2 p-2 bg-gray-100 rounded text-xs overflow-x-auto">{err.error_stack}</pre></details>}
+              </div>
+            ))}</div>
           )}
-        </div>
-      )}
-
-      {/* Full Report Tab */}
-      {activeTab === 'full' && (
-        <div className="bg-white rounded-3xl p-8 shadow-xl border-2 border-green-200">
-          <h2 className="font-display text-2xl text-green-800 mb-6">📊 Full Raport - Wszystkie zdarzenia</h2>
-          
-          {/* Filters */}
-          <div className="flex flex-wrap gap-4 mb-8 items-end">
-            <div className="flex flex-col gap-2">
-              <label className="font-semibold text-green-800 text-sm">Od daty</label>
-              <input
-                type="date"
-                className="px-4 py-3 border-2 border-green-200 rounded-xl focus:outline-none focus:border-green-400"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-              />
-            </div>
-            <div className="flex flex-col gap-2">
-              <label className="font-semibold text-green-800 text-sm">Do daty</label>
-              <input
-                type="date"
-                className="px-4 py-3 border-2 border-green-200 rounded-xl focus:outline-none focus:border-green-400"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-              />
-            </div>
-            <button 
-              className="px-6 py-3 bg-white border-2 border-green-400 rounded-xl font-semibold text-green-800 hover:bg-green-400 hover:text-white transition-all"
-              onClick={() => exportToExcel('full')}
-            >
-              📥 Export Excel
-            </button>
-            <button 
-              className="px-6 py-3 bg-white border-2 border-green-400 rounded-xl font-semibold text-green-800 hover:bg-green-400 hover:text-white transition-all"
-              onClick={() => exportToPDF('full')}
-            >
-              📄 Export PDF
-            </button>
-          </div>
-
-          {/* Table */}
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="bg-green-100">
-                  <th className="p-4 text-left font-bold text-green-800 uppercase text-sm">Data zdarzenia</th>
-                  <th className="p-4 text-left font-bold text-green-800 uppercase text-sm">Typ</th>
-                  <th className="p-4 text-left font-bold text-green-800 uppercase text-sm">Użytkownik</th>
-                  <th className="p-4 text-left font-bold text-green-800 uppercase text-sm">Data rezerwacji</th>
-                  <th className="p-4 text-left font-bold text-green-800 uppercase text-sm">Godzina</th>
-                </tr>
-              </thead>
-              <tbody>
-                {events.map(e => (
-                  <tr key={e.id} className="border-b-2 border-green-100 hover:bg-green-50">
-                    <td className="p-4">{new Date(e.created_at).toLocaleString('pl-PL')}</td>
-                    <td className="p-4">
-                      <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold uppercase ${
-                        e.type === 'reservation' ? 'bg-green-100 text-green-800' :
-                        e.type === 'admin-booking' ? 'bg-blue-100 text-blue-800' :
-                        e.type === 'cancellation' ? 'bg-red-100 text-red-800' :
-                        'bg-orange-100 text-orange-800'
-                      }`}>
-                        {e.type === 'reservation' ? 'Rezerwacja' : 
-                         e.type === 'admin-booking' ? 'Rezerwacja (Admin)' :
-                         e.type === 'cancellation' ? 'Odwołanie' : 'Odwołanie (Admin)'}
-                      </span>
-                    </td>
-                    <td className="p-4">{e.user_code}</td>
-                    <td className="p-4">{formatDatePL(e.date)}</td>
-                    <td className="p-4">{e.hour}:00</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* Audit Log Tab */}
-      {activeTab === 'audit' && (
-        <div className="space-y-6">
-          {/* Audit Log Section */}
-          <div className="bg-white rounded-3xl p-8 shadow-xl border-2 border-green-200">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="font-display text-2xl text-green-800">🔍 Audit Log - Historia zmian</h2>
-              <button 
-                className="px-4 py-2 bg-green-500 text-white rounded-lg font-semibold hover:bg-green-600 transition-all"
-                onClick={async () => {
-                  try {
-                    const data = await getAuditLog(100)
-                    setAuditLog(data)
-                    showToast('Audit log odświeżony', 'success')
-                  } catch (err) {
-                    showToast('Błąd: ' + err.message, 'error')
-                  }
-                }}
-              >
-                🔄 Odśwież
-              </button>
-            </div>
-            
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="bg-green-100">
-                    <th className="p-3 text-left font-bold text-green-800 text-sm">Data</th>
-                    <th className="p-3 text-left font-bold text-green-800 text-sm">Akcja</th>
-                    <th className="p-3 text-left font-bold text-green-800 text-sm">Tabela</th>
-                    <th className="p-3 text-left font-bold text-green-800 text-sm">Użytkownik</th>
-                    <th className="p-3 text-left font-bold text-green-800 text-sm">Szczegóły</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {auditLog.length === 0 ? (
-                    <tr>
-                      <td colSpan="5" className="p-8 text-center text-green-600">
-                        Kliknij "Odśwież" aby załadować audit log
-                      </td>
-                    </tr>
-                  ) : (
-                    auditLog.map(log => (
-                      <tr key={log.id} className="border-b border-green-100 hover:bg-green-50">
-                        <td className="p-3 text-sm">{new Date(log.created_at).toLocaleString('pl-PL')}</td>
-                        <td className="p-3">
-                          <span className={`inline-block px-2 py-1 rounded text-xs font-semibold ${
-                            log.action === 'INSERT' ? 'bg-green-100 text-green-800' :
-                            log.action === 'UPDATE' ? 'bg-blue-100 text-blue-800' :
-                            log.action === 'DELETE' ? 'bg-red-100 text-red-800' :
-                            'bg-gray-100 text-gray-800'
-                          }`}>
-                            {log.action}
-                          </span>
-                        </td>
-                        <td className="p-3 text-sm">{log.table_name}</td>
-                        <td className="p-3 text-sm font-medium">{log.user_code || '-'}</td>
-                        <td className="p-3 text-sm">
-                          {log.new_data && (
-                            <span className="text-gray-600">
-                              {log.new_data.date && `${log.new_data.date} ${log.new_data.hour}:00`}
-                              {log.new_data.status && ` (${log.new_data.status})`}
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* App Errors Section */}
-          <div className="bg-white rounded-3xl p-8 shadow-xl border-2 border-red-200">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="font-display text-2xl text-red-800">⚠️ Błędy aplikacji</h2>
-              <button 
-                className="px-4 py-2 bg-red-500 text-white rounded-lg font-semibold hover:bg-red-600 transition-all"
-                onClick={async () => {
-                  try {
-                    const data = await getAppErrors(50)
-                    setAppErrors(data)
-                    showToast('Błędy odświeżone', 'success')
-                  } catch (err) {
-                    showToast('Błąd: ' + err.message, 'error')
-                  }
-                }}
-              >
-                🔄 Odśwież
-              </button>
-            </div>
-            
-            {appErrors.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                Kliknij "Odśwież" aby załadować błędy lub brak zarejestrowanych błędów 🎉
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {appErrors.map(err => (
-                  <div key={err.id} className="bg-red-50 rounded-xl p-4 border border-red-200">
-                    <div className="flex justify-between items-start mb-2">
-                      <span className="font-semibold text-red-800">{err.error_type}</span>
-                      <span className="text-sm text-gray-500">
-                        {new Date(err.created_at).toLocaleString('pl-PL')}
-                      </span>
-                    </div>
-                    <p className="text-red-700 mb-2">{err.error_message}</p>
-                    {err.user_code && (
-                      <p className="text-sm text-gray-600">Użytkownik: {err.user_code}</p>
-                    )}
-                    {err.page_url && (
-                      <p className="text-sm text-gray-500 truncate">URL: {err.page_url}</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
       )}
 
       {modal && <Modal {...modal} loading={actionLoading} />}
 
-      {/* Admin Booking Modal */}
       {bookingModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl p-10 max-w-md w-full shadow-2xl animate-fade-in">
-            <h3 className="font-display text-2xl text-green-800 mb-4">
-              Rezerwacja dla użytkownika
-            </h3>
-            <p className="text-green-600 mb-6">
-              Termin: <strong>{formatDateTime(bookingModal.date, bookingModal.hour)}</strong>
-            </p>
-            
-            <div className="mb-6">
-              <label className="block font-semibold text-green-800 mb-2">
-                Wybierz apartament
-              </label>
-              <select
-                className="w-full px-4 py-3 border-2 border-green-200 rounded-xl focus:outline-none focus:border-green-400 bg-white"
-                value={selectedUserForBooking}
-                onChange={(e) => setSelectedUserForBooking(e.target.value)}
-              >
-                <option value="">-- Wybierz --</option>
-                {USERS.map(u => (
-                  <option key={u} value={u}>{u}</option>
-                ))}
-              </select>
-            </div>
-            
+          <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
+            <h3 className="font-display text-2xl text-green-800 mb-4">Rezerwacja dla uzytkownika</h3>
+            <p className="text-green-600 mb-6">Termin: <strong>{formatDateTime(bookingModal.date, bookingModal.hour)}</strong></p>
+            <div className="mb-4"><label className="block font-semibold text-green-800 mb-2">Apartament</label><select className="w-full px-4 py-3 border-2 border-green-200 rounded-xl bg-white" value={selectedUserForBooking} onChange={(e) => setSelectedUserForBooking(e.target.value)}><option value="">-- Wybierz --</option>{USERS.map(u => <option key={u} value={u}>{u}</option>)}</select></div>
+            <div className="mb-6"><label className="block font-semibold text-green-800 mb-2">Notatka</label><textarea className="w-full px-4 py-3 border-2 border-green-200 rounded-xl resize-none" rows={2} value={bookingNote} onChange={(e) => setBookingNote(e.target.value)} placeholder="Opcjonalnie..." /></div>
             <div className="flex gap-4 justify-center">
-              <button
-                className="px-8 py-3 rounded-xl font-semibold border-2 border-green-200 text-green-800 hover:bg-green-50 transition-all"
-                onClick={() => {
-                  setBookingModal(null)
-                  setSelectedUserForBooking('')
-                }}
-                disabled={actionLoading}
-              >
-                Anuluj
-              </button>
-              <button
-                className="px-8 py-3 rounded-xl font-semibold bg-gradient-to-r from-green-500 to-green-700 text-white hover:-translate-y-0.5 transition-all disabled:opacity-50 flex items-center gap-2"
-                onClick={confirmAdminBooking}
-                disabled={actionLoading || !selectedUserForBooking}
-              >
-                {actionLoading && <div className="loader w-4 h-4 border-2"></div>}
-                Rezerwuj
-              </button>
+              <button className="px-8 py-3 rounded-xl font-semibold border-2 border-green-200 text-green-800 hover:bg-green-50" onClick={() => { setBookingModal(null); setSelectedUserForBooking(''); setBookingNote('') }} disabled={actionLoading}>Anuluj</button>
+              <button className="px-8 py-3 rounded-xl font-semibold bg-green-500 text-white hover:bg-green-600 disabled:opacity-50 flex items-center gap-2" onClick={confirmAdminBooking} disabled={actionLoading || !selectedUserForBooking}>{actionLoading && <div className="loader w-4 h-4 border-2"></div>}Rezerwuj</button>
+            </div>
+            <p className="text-xs text-gray-500 mt-4 text-center">Admin: {user}</p>
+          </div>
+        </div>
+      )}
+
+      {blockModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
+            <h3 className="font-display text-2xl text-orange-800 mb-4">🚫 Blokowanie terminu</h3>
+            <p className="text-orange-600 mb-6">Termin: <strong>{formatDateTime(blockModal.date, blockModal.hour)}</strong></p>
+            <div className="mb-6"><label className="block font-semibold text-orange-800 mb-2">Powod</label><input type="text" className="w-full px-4 py-3 border-2 border-orange-200 rounded-xl" value={blockReason} onChange={(e) => setBlockReason(e.target.value)} placeholder="np. Konserwacja" /></div>
+            <div className="flex gap-4 justify-center">
+              <button className="px-8 py-3 rounded-xl font-semibold border-2 border-orange-200 text-orange-800 hover:bg-orange-50" onClick={() => { setBlockModal(null); setBlockReason('') }} disabled={actionLoading}>Anuluj</button>
+              <button className="px-8 py-3 rounded-xl font-semibold bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-50 flex items-center gap-2" onClick={confirmBlockSlot} disabled={actionLoading}>{actionLoading && <div className="loader w-4 h-4 border-2"></div>}Zablokuj</button>
+            </div>
+            <p className="text-xs text-gray-500 mt-4 text-center">Admin: {user}</p>
+          </div>
+        </div>
+      )}
+
+      {noteModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
+            <h3 className="font-display text-2xl text-blue-800 mb-4">📝 Edycja notatki</h3>
+            <p className="text-blue-600 mb-6">{noteModal.user_code} - {formatDateTime(noteModal.date, noteModal.hour)}</p>
+            <div className="mb-6"><label className="block font-semibold text-blue-800 mb-2">Notatka</label><textarea className="w-full px-4 py-3 border-2 border-blue-200 rounded-xl resize-none" rows={3} value={editingNote} onChange={(e) => setEditingNote(e.target.value)} placeholder="Dodaj notatke..." /></div>
+            <div className="flex gap-4 justify-center">
+              <button className="px-8 py-3 rounded-xl font-semibold border-2 border-blue-200 text-blue-800 hover:bg-blue-50" onClick={() => { setNoteModal(null); setEditingNote('') }} disabled={actionLoading}>Anuluj</button>
+              <button className="px-8 py-3 rounded-xl font-semibold bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50 flex items-center gap-2" onClick={confirmEditNote} disabled={actionLoading}>{actionLoading && <div className="loader w-4 h-4 border-2"></div>}Zapisz</button>
             </div>
           </div>
         </div>
