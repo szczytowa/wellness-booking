@@ -347,7 +347,7 @@ export default function AdminPanel({ user, showToast }) {
     doc.setTextColor(128, 128, 128)
     doc.setFontSize(7)
     doc.setFont('helvetica', 'normal')
-    doc.text(`Wygenerowano: ${new Date().toLocaleString('pl-PL')} | Admin: ${user}`, pageWidth / 2, pageHeight - 4, { align: 'center' })
+    doc.text(`Wygenerowano: ${new Date().toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw' })} | Admin: ${user}`, pageWidth / 2, pageHeight - 4, { align: 'center' })
     
     doc.save(`raport_wellness_${analysisMonthFrom}_${analysisMonthTo}.pdf`)
     showToast('PDF wygenerowany!', 'success')
@@ -539,7 +539,7 @@ export default function AdminPanel({ user, showToast }) {
                 <tr><td colSpan="6" className="p-8 text-center text-gray-500">Brak zdarzeń w wybranym okresie</td></tr>
               ) : events.map(e => (
                 <tr key={e.id} className="border-b-2 border-purple-100 hover:bg-purple-50">
-                  <td className="p-4">{new Date(e.created_at).toLocaleString('pl-PL')}</td>
+                  <td className="p-4">{new Date(e.created_at).toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw' })}</td>
                   <td className="p-4"><span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${e.type === 'reservation' ? 'bg-green-100 text-green-800' : e.type === 'admin-booking' ? 'bg-blue-100 text-blue-800' : e.type === 'cancellation' ? 'bg-red-100 text-red-800' : e.type === 'admin-cancel' ? 'bg-orange-100 text-orange-800' : e.type === 'block' ? 'bg-gray-100 text-gray-800' : 'bg-gray-100 text-gray-800'}`}>
                     {e.type === 'reservation' ? 'Rezerwacja' : e.type === 'admin-booking' ? 'Rez. (Admin)' : e.type === 'cancellation' ? 'Odwołanie' : e.type === 'admin-cancel' ? 'Odw. (Admin)' : e.type === 'block' ? 'Blokada' : e.type === 'unblock' ? 'Odblokowanie' : e.type}
                   </span></td>
@@ -591,7 +591,7 @@ export default function AdminPanel({ user, showToast }) {
           {appErrors.length === 0 ? <div className="text-center py-10"><div className="text-6xl mb-4">🎉</div><div className="text-gray-500">Kliknij "Odśwież" lub brak błędów</div></div> : (
             <div className="space-y-4">{appErrors.map(err => (
               <div key={err.id} className="bg-red-50 rounded-xl p-4 border border-red-200">
-                <div className="flex justify-between items-start mb-2"><span className="font-semibold text-red-800">{err.error_type}</span><span className="text-sm text-gray-500">{new Date(err.created_at).toLocaleString('pl-PL')}</span></div>
+                <div className="flex justify-between items-start mb-2"><span className="font-semibold text-red-800">{err.error_type}</span><span className="text-sm text-gray-500">{new Date(err.created_at).toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw' })}</span></div>
                 <p className="text-red-700 mb-2 font-mono text-sm">{err.error_message}</p>
                 {err.user_code && <p className="text-sm text-gray-600">👤 {err.user_code}</p>}
                 {err.error_stack && <details className="mt-2"><summary className="text-sm text-gray-500 cursor-pointer">Stack trace</summary><pre className="mt-2 p-2 bg-gray-100 rounded text-xs overflow-x-auto">{err.error_stack}</pre></details>}
